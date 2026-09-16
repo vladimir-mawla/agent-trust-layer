@@ -40,10 +40,10 @@
   <!-- ───────────── THE LOCKED SPEC ───────────── -->
   <h2>1 · The Locked Spec (what we are building)</h2>
   <div class="card locked">
-    <p><b>Cognitive job:</b> {{COGNITIVE_JOB}}</p>
-    <p><b>Inputs:</b> {{INPUTS}} &nbsp;→&nbsp; <b>Outputs:</b> {{OUTPUTS}}</p>
-    <p><b>Autonomy level:</b> {{AUTONOMY}} &nbsp;|&nbsp; <b>Human-in-the-loop points:</b> {{HITL}}</p>
-    <p><b>Failure tolerance:</b> {{FAILURE_TOLERANCE}} &nbsp;|&nbsp; <b>Trust boundary:</b> {{TRUST_BOUNDARY}}</p>
+    <p><b>Cognitive job:</b> Decide whether one agent should act on another agent's request, by verifying cryptographically signed claims about who that agent is, what authority it was granted, and what it has done before.</p>
+    <p><b>Inputs:</b> A counterparty agent's DID, a signed presentation of its verifiable credentials answering a freshness challenge, and the specific action being requested with its parameters. &nbsp;→&nbsp; <b>Outputs:</b> An accept or refuse decision, plus a machine-readable explanation naming the exact rule that fired and the exact credential field that satisfied or failed it.</p>
+    <p><b>Autonomy level:</b> Fully autonomous for decisions the policy covers; the policy itself is authored by a human and every decision is explainable after the fact. &nbsp;|&nbsp; <b>Human-in-the-loop points:</b> Humans author policies, choose which issuers to trust, and grant or revoke the authority credentials that agents present. No human is in the per-decision loop.</p>
+    <p><b>Failure tolerance:</b> Fail closed. An unverifiable, expired, revoked, or unparseable credential is treated exactly as an absent one, and the request is refused rather than allowed through. &nbsp;|&nbsp; <b>Trust boundary:</b> Everything a counterparty presents is untrusted until its signature verifies against the issuer's key. Possessing a DID string proves nothing; only signing a fresh challenge proves key possession.</p>
     <p class="note">Filled during Genesis step G0 (Cognitive Design) via <code>agentic-swe-master</code>.</p>
   </div>
 

@@ -14,22 +14,22 @@ human/visual view; this is the one loops read). Sliced so each milestone ships i
 > Three fundamentally different approaches to the cognitive job. Pick one. Record the rationale.
 > This is the cheapest design decision — you haven't written a line of code yet.
 
-### Approach A — {{APPROACH_A_NAME}}
-{{APPROACH_A_DESCRIPTION}}
-- Strengths: {{APPROACH_A_STRENGTHS}}
-- Weaknesses: {{APPROACH_A_WEAKNESSES}}
+### Approach A — Central trust registry
+A service that stores agent reputations and answers "is this agent trustworthy" for anyone who queries it.
+- Strengths: simple to build; easy to query.
+- Weaknesses: it IS the "score with no mechanism" the brief disqualifies; a single point of trust and failure that nobody outside the registry can verify.
 
-### Approach B — {{APPROACH_B_NAME}}
-{{APPROACH_B_DESCRIPTION}}
-- Strengths: {{APPROACH_B_STRENGTHS}}
-- Weaknesses: {{APPROACH_B_WEAKNESSES}}
+### Approach B — Self-certifying identity with verifiable credentials
+Agents hold `did:key` identifiers whose identifier IS their public key; claims about them are W3C Verifiable Credentials signed by issuers; any party verifies offline with no registry.
+- Strengths: standards-based (DIDs + VCs, the named bonus); verification needs no infrastructure or network, so the demo is deterministic.
+- Weaknesses: revocation genuinely needs somewhere to look; key loss is unrecoverable by design.
 
-### Approach C — {{APPROACH_C_NAME}}
-{{APPROACH_C_DESCRIPTION}}
-- Strengths: {{APPROACH_C_STRENGTHS}}
-- Weaknesses: {{APPROACH_C_WEAKNESSES}}
+### Approach C — On-chain attestations
+Publish claims and revocations to a blockchain so any party can read the shared, tamper-evident log.
+- Strengths: tamper-evident public log; revocation is naturally global.
+- Weaknesses: cost and latency make a 90-second demo painful; the interesting parts of the brief (scope, delegation, policy) are unaffected by where the log lives, so the chain adds ceremony, not clarity.
 
-### Chosen: {{CHOSEN_APPROACH}} — {{CHOSEN_RATIONALE}}
+### Chosen: B — because verification with no trusted third party is the thing that makes this a trust *layer* rather than a trust *vendor*, and it puts the engineering effort where the judging weight actually is: scope, revocation, and policy.
 
 ---
 
