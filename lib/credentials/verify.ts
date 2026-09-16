@@ -278,8 +278,21 @@ function verifyCredentialOfKind<Kind extends string, Claim extends object, C ext
 
   // Only NOW is the payload decoded to JSON — `decodeVerifiedPayload`
   // requires `verifiedToken`, which could only be produced by the
-  // successful `verifySignature` call above.
-  const payload = decodeVerifiedPayload(parsed, verifiedToken);
+  // successful `verifySignature` call above. A signature can be
+  // perfectly valid over bytes that still aren't valid JSON (an attacker
+  // signing arbitrary non-JSON bytes with their OWN real key), so this
+  // can throw `MalformedJwsError` exactly like `parseCompactJws` above
+  // does for the header segment — same failure class ("the wire format
+  // can't be parsed at all"), just discovered one step later because the
+  // payload, unlike the header, isn't inspected until after the
+  // signature check. `failureFrom` picks up `MalformedJwsError`'s own
+  // `step: "parse"` here, so this is labeled identically to step 1.
+  let payload: unknown;
+  try {
+    payload = decodeVerifiedPayload(parsed, verifiedToken);
+  } catch (error) {
+    return failureFrom(error, "parse");
+  }
 
   // --- Step 3: structure -----------------------------------------------
   let base: ValidatedBase;

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { ed25519 } from "@noble/curves/ed25519.js";
+import { utf8ToBytes } from "@noble/hashes/utils.js";
 import {
   createChallenge,
   encodeDidKey,
@@ -32,6 +34,35 @@ function makeIdentity(): Identity {
 function proofOfPossessionFor(identity: Identity, now = 0, ttlMs = 60_000): ProofOfPossession {
   const challenge = createChallenge({ now, ttlMs });
   return provePossession(identity.privateKey, identity.did, challenge);
+}
+
+/**
+ * Forge a compact JWS that is REAL by every check `parseCompactJws` and
+ * `verifySignature` perform — a well-formed header naming `signer`'s own
+ * `kid`, valid base64url throughout, and a genuine Ed25519 signature by
+ * `signer`'s own private key over the exact bytes transmitted — except
+ * that the payload segment decodes to bytes that are not valid JSON at
+ * all (not even a JSON string: no surrounding quotes). This is exactly
+ * FINDING 0's attack: an attacker signs arbitrary non-JSON bytes with
+ * their OWN real key and names their OWN `did:key` as `kid`, so parsing
+ * and signature verification both succeed, and only `decodeVerifiedPayload`
+ * discovers the payload can't be parsed as JSON.
+ *
+ * Deliberately does NOT go through `signCompactJws`, because that
+ * function `JSON.stringify`s its payload argument — stringifying the
+ * literal string `"not json at all"` would produce a quoted JSON string
+ * literal (`"\"not json at all\""`), which DOES parse as JSON and so
+ * would not reproduce the bug. This builds the JWS by hand instead, the
+ * same way `verify.test.ts`'s other tamper tests already do.
+ */
+function forgeValidSignatureOverNonJsonPayload(signer: Identity, rawPayloadText: string): string {
+  const headerB64 = encodeBase64Url(
+    utf8ToBytes(JSON.stringify({ alg: "EdDSA", kid: verificationMethodId(signer.did), typ: "vc+jwt" })),
+  );
+  const payloadB64 = encodeBase64Url(utf8ToBytes(rawPayloadText));
+  const signingInput = utf8ToBytes(`${headerB64}.${payloadB64}`);
+  const signatureB64 = encodeBase64Url(ed25519.sign(signingInput, signer.privateKey));
+  return `${headerB64}.${payloadB64}.${signatureB64}`;
 }
 
 describe("verifyAuthorityCredential / verifyHistoryAttestation — happy path", () => {
@@ -408,5 +439,64 @@ describe("a history attestation cannot be used where authority is required, and 
     if (result.ok) throw new Error("expected refusal");
     expect(result.step).toBe("structure");
     expect(result.reason).toContain(AUTHORITY_CREDENTIAL_TYPE);
+  });
+});
+
+describe("FINDING 0 regression: a real signature over a non-JSON payload must fail closed, not throw", () => {
+  // Reproduces the exact attack: the attacker signs arbitrary non-JSON
+  // bytes with their OWN real Ed25519 key and names their OWN did:key as
+  // `kid`. `parseCompactJws` accepts it (valid base64url; it never
+  // inspects JSON-ness). `verifySignature` succeeds (a real signature
+  // over real bytes by the named key). Only `decodeVerifiedPayload`
+  // discovers the bytes aren't JSON — and, before the fix, that throw
+  // propagated all the way out of `verifyAuthorityCredential` /
+  // `verifyHistoryAttestation` uncaught, instead of coming back as a
+  // structured `VerificationFailure` like every other rejection reason.
+
+  it("verifyAuthorityCredential returns a structured failure, and does not throw", () => {
+    const attacker = makeIdentity();
+    const subject = makeIdentity();
+    const forged = forgeValidSignatureOverNonJsonPayload(attacker, "not json at all");
+
+    let result: ReturnType<typeof verifyAuthorityCredential> | undefined;
+    expect(() => {
+      result = verifyAuthorityCredential(forged, proofOfPossessionFor(subject), { now: 0 });
+    }).not.toThrow();
+
+    expect(result).toBeDefined();
+    expect(result!.ok).toBe(false);
+    if (result!.ok) throw new Error("expected failure — the payload is not even valid JSON");
+    expect(result!.step).toBe("parse");
+    expect(result!.reason).toMatch(/not valid JSON/i);
+  });
+
+  it("verifyHistoryAttestation returns a structured failure, and does not throw", () => {
+    const attacker = makeIdentity();
+    const subject = makeIdentity();
+    const forged = forgeValidSignatureOverNonJsonPayload(attacker, "not json at all");
+
+    let result: ReturnType<typeof verifyHistoryAttestation> | undefined;
+    expect(() => {
+      result = verifyHistoryAttestation(forged, proofOfPossessionFor(subject), { now: 0 });
+    }).not.toThrow();
+
+    expect(result).toBeDefined();
+    expect(result!.ok).toBe(false);
+    if (result!.ok) throw new Error("expected failure — the payload is not even valid JSON");
+    expect(result!.step).toBe("parse");
+    expect(result!.reason).toMatch(/not valid JSON/i);
+  });
+
+  it("also rejects, without throwing, a payload that decodes to bytes that are merely truncated JSON", () => {
+    // A second non-JSON shape (truncated object), to show this isn't
+    // narrowly tied to one particular malformed string.
+    const attacker = makeIdentity();
+    const subject = makeIdentity();
+    const forged = forgeValidSignatureOverNonJsonPayload(attacker, '{"issuer": "did:key:z6Mk');
+
+    const result = verifyAuthorityCredential(forged, proofOfPossessionFor(subject), { now: 0 });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.step).toBe("parse");
   });
 });
