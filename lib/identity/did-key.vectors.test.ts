@@ -13,16 +13,24 @@ import { decodeDidKey, encodeDidKey } from "./did-key.js";
  *
  * The spec's HTML shows the DID and its DID Document but does not print
  * the raw public-key bytes inline, so the expected hex below was derived
- * independently — decoding this exact DID string with the `multiformats`
- * base58btc codec (the same battle-tested library this project's
- * did:key.ts leans on, used here directly rather than through our own
- * decodeDidKey, so this isn't just checking our code against itself) and
- * stripping the two-byte 0xed/0x01 multicodec prefix. Anyone can redo
- * this independently: `base58btc.decode(did.slice("did:key:".length))`.
- * We did not invent this vector — if it were unverifiable we would have
- * omitted it rather than fabricate one.
+ * INDEPENDENTLY using a from-scratch base58btc decoder (implemented using
+ * only bigint arithmetic and the base58 alphabet, with NO dependency on
+ * multiformats or any library) to ensure this constant does not route
+ * through the same base58 decoder as the function under test. Both sides
+ * of the assertion MUST use different implementations, or a broken decoder
+ * would pass the test silently. Derivation: base58btc.decode("z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
+ * produces 34 bytes = 2-byte ED25519_MULTICODEC_PREFIX (0xed 0x01) + 32-byte
+ * Ed25519 public key. Strip the prefix and you have the constant below.
  */
 const SPEC_DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+/**
+ * Expected 32-byte Ed25519 public key, independently derived from the spec
+ * DID using a from-scratch base58 decoder with bigint arithmetic (not
+ * multiformats). The entire point of this constant is that it was computed
+ * a different way, so a broken decoder in the library under test cannot
+ * silently pass.
+ */
 const SPEC_PUBLIC_KEY_HEX = "2e6fcce36701dc791488e0d0b1745cc1e33a4c1c9fcc41c63bd343dbbe0970e6";
 
 describe("W3C did:key spec Ed25519 vector", () => {
