@@ -11,7 +11,23 @@ chain anyone can verify themselves: an identifier that certifies itself, credent
 signed and checked rather than trusted on sight, and a policy that names the exact rule and the
 exact field that decided the outcome — never a bare `true`/`false`.
 
-_Live demo: pending deployment — link goes here_
+**Live: https://agent-trust-layer-pi.vercel.app**
+
+The deployment is not a static page. Its health endpoint runs a real Ed25519 round trip on
+every request, inside the deployed process:
+
+```bash
+curl -sf https://agent-trust-layer-pi.vercel.app/api/health
+```
+
+```json
+{"status":"ok","commit":"c303ab4ff4640e05281f9fda7841499bae501ca1","checks":{"identity":{"pass":true,"elapsedMs":90.84}}}
+```
+
+The `commit` field is the deployed git SHA, so you can confirm what you are talking to matches
+what is in this repository. `checks.identity` generates a keypair, encodes a `did:key`, decodes
+it back, signs a challenge and verifies it — and the endpoint returns **503, not 200**, if any
+of that fails.
 
 ## The distinction that organizes the design
 
