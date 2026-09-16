@@ -1,11 +1,11 @@
 # CURRENT
 - active_loop: L1 BUILD
-- target: M1
+- target: M2
 - iteration: 1
-- last_gate: L1 BUILD self-checks green (typecheck clean, npm test 29/29 green, npm test -- identity 29/29 green, lib framework-free, no forbidden tracked files, no private key material in history) — L4 VERIFY by a separate agent/model still required before M1 is marked done in DONE.html
-- last_action: L1 BUILD on M1 complete — scaffolded package.json/tsconfig.json/vitest, implemented lib/identity/{errors,keys,did-key,challenge,index}.ts with @noble/curves + @noble/hashes + multiformats (all pinned exact versions), wrote 29 tests across 4 files (keys, did-key, did-key.vectors cross-checked against the W3C did-method-key spec's Ed25519 example, challenge), committed in 6 granular commits (41cf0c5..2db8db4), all gates re-verified against the final clean tree
-- next_action: L4 verify on M1 (separate agent/model; DONE.html section 2 gates + context-graph.json invariants are the checklist — DONE.html/PLAN.md are locked and were not edited by this pass)
+- last_gate: L1 BUILD self-checks green — `npm run typecheck` clean (two `tsc -p` invocations: app + lib), `npm test` 29/29 green (unchanged from M1), `npm run build` (`next build --webpack`) succeeds, `npm run dev` + `curl localhost:3000/api/health` returns HTTP 200 with `status:"ok"`, a scratch-corrupted identity round-trip returns HTTP 503 (fail-closed proof) and reverting restores 200, `lib/` still framework-free by grep, no forbidden files tracked (node_modules/.next/.env/.pem) — L4 VERIFY by a separate agent/model still required before M2 is marked done in DONE.html. M2 has **not** been deployed to Vercel by this pass — deploying is the user's own step (importing the repo at vercel.com/new); this pass only proves the repo is deploy-ready.
+- last_action: L1 BUILD on M2 complete — installed next@16.3.5/react@19.3.0/react-dom@19.3.0 (+ matching @types, all exact-pinned, versions verified via `npm view`); split the pre-existing strict NodeNext tsconfig.json into tsconfig.lib.json (unchanged) plus a new Next-flavored root tsconfig.json (moduleResolution "bundler", jsx "react-jsx", scoped to app/**), with `npm run typecheck` now running both; forced `next dev`/`next build` onto `--webpack` (+ `experimental.extensionAlias` in next.config.ts) because Turbopack (Next 16's default) cannot yet resolve lib/identity's NodeNext-style ".js"-suffixed relative imports to their ".ts" files, which webpack's extensionAlias already does; added app/api/health/route.ts (Node runtime, force-dynamic, fail-closed real did:key + challenge-response round-trip, never returns key material) and a plain landing page (app/layout.tsx, app/page.tsx, app/globals.css); committed in 4 granular commits (c164926..eeef5e4)
+- next_action: L4 verify on M2 (separate agent/model; DONE.html section 2 gates + context-graph.json invariants are the checklist), then the user imports the repo at vercel.com/new and sends back the live URL so M2's actual demo command (`curl -sf $DEPLOY_URL/api/health`) can be run for real — DONE.html/PLAN.md are locked and were not edited by this pass
 - model: claude-sonnet-5
-- tokens_used: ~137000
+- tokens_used: ~unspecified (not tracked by this harness)
 - tokens_budget: 150000
 - skills_loaded: []
