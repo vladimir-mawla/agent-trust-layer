@@ -5,9 +5,17 @@
   "nodes": [],
   "edges": [],
   "invariants": {
-    "$TODO": "Add 2-3 health rules, e.g. \"API latency < 200ms\", \"domain imports no framework\"."
+    "signature-verified-before-claim-read": "No field inside a credential is read, parsed, or used in a decision before that credential's signature has verified against the issuer's public key. Verify by grepping every read of credential subject/claim fields and confirming it sits downstream of a verification result.",
+    "no-unverified-claim-reaches-policy": "The policy engine accepts only credentials that carry a verification result; it has no code path that takes a raw or self-asserted claim. Verify by checking the policy engine's input type admits nothing unverified.",
+    "every-decision-is-explainable": "Every accept or refuse returns a structured explanation naming the rule that fired and the credential field that satisfied or failed it. A bare boolean return is a violation.",
+    "no-private-key-material-escapes": "Private keys never appear in any credential, presentation, API response, log line, or committed file. Verify by grepping responses and the full git history for key material."
   },
   "freeze_boundary": [
-    "src/**"
+    "app/**",
+    "lib/**",
+    "components/**",
+    "*.config.*",
+    "package.json",
+    "tsconfig.json"
   ]
 }
