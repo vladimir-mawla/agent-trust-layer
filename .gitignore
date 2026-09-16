@@ -38,3 +38,14 @@ Thumbs.db
 
 # Vercel
 .vercel
+
+# Next.js-generated agent notes
+# AGENTS.md and CLAUDE.md at the repo root are rewritten by `next dev` /
+# `next build` itself (see node_modules/next/dist/server/lib/generate-agent-files.js)
+# to document Next 16 breaking changes for coding agents. They are
+# machine-generated, agent-advisory scratch notes, not project content —
+# they regenerate on every build, so tracking them just adds churn to a
+# public repo judges will read. They stay on disk (Next keeps rewriting
+# them); they are just no longer tracked in git.
+AGENTS.md
+CLAUDE.md
