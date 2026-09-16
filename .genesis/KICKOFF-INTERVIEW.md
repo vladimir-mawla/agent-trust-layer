@@ -74,50 +74,50 @@ now — your cognitive job is pre-filled in decisions-manifest.md."
 Generated: 2026-09-16 via KICKOFF-INTERVIEW.md
 
 ## Trade-off ranking
-1. {{PRIORITY_1}}
-2. {{PRIORITY_2}}
-3. {{PRIORITY_3}}
-4. {{PRIORITY_4}}
+1. A coherent trust model that is not a score — trust as a decision about a specific counterparty, for a specific action, under a stated policy, from verifiable evidence.
+2. Real cryptography — genuine Ed25519 signing and verification, where tampering actually breaks the signature rather than tripping a simulated check.
+3. A live, openable demo URL where a trust-gated decision and its reason are visible inside 90 seconds.
+4. Named attacks, each refused for a named reason — the failure thinking has to be demonstrated, not asserted.
 
 ## Scale
-Launch: {{SCALE_LAUNCH}}
-12 months: {{SCALE_12MO}}
+Launch: Demo scale — two agents, a handful of credentials, single-digit concurrent viewers. Correctness and explainability matter; throughput does not.
+12 months: Not applicable — this is a demonstrator, not a service. If the model were adopted, the scaling question would be issuer discovery and revocation distribution, not request volume.
 
 ## Project type
-{{PROJECT_TYPE}}  <!-- prototype / internal / production -->
+prototype  <!-- prototype / internal / production -->
 
 ## Performance constraints (non-negotiable)
-- {{PERF_1}}
-- {{PERF_2}}
+- A full verification — signature, expiry, subject binding, revocation, policy — completes in under 100ms locally, so the demo feels immediate rather than loading.
+- The deployed page renders its first trust decision without any configuration, credential, or sign-in by the viewer.
 
 ## UX / brand constraints
-{{UX_CONSTRAINTS}}
+One page must tell the whole story in 90 seconds: the request, the decision, and the reason behind it. Every decision surfaces the rule that fired and the credential field it read. No login, no setup, no configuration.
 
 ## Failure behaviour
-{{FAILURE_BEHAVIOUR}}
+Fail closed. A credential that is unverifiable, expired, revoked, out of scope, or simply malformed is treated exactly as an absent one: the request is refused, with the reason stated.
 
 ## Integration points
-{{INTEGRATIONS}}
+None required. Vercel for hosting only. Deliberately no external identity provider, trust registry, blockchain, or LLM — verification is offline and deterministic by design, which is also what makes the demo reproducible.
 
 ## Auth requirements
-{{AUTH}}
+Agents authenticate to one another with did:key plus an Ed25519 challenge-response proving key possession. There are no human user accounts; the public demo is anonymous and read-only.
 
 ## Compliance constraints
-{{COMPLIANCE}}
+No binding regulatory regime. Follows the W3C DID and Verifiable Credentials data models by choice, so that credentials issued here are legible to other implementations.
 
 ## Primary failure mode (the honest one)
-{{FAILURE_MODE}}
+The worst case is a wrong accept: an action allowed on a credential that was forged, tampered with, replayed by the wrong subject, expired, revoked, self-issued, or outside its granted scope. Each of those gets its own named test in M7.
 
 ## Quality bar ("embarrassed to ship if...")
-{{QUALITY_BAR}}
+Real cryptography, not simulated — actual Ed25519 signatures, with verification actually failing on a tampered byte. Every attack must be refused for the RIGHT reason, asserted by test, not merely refused.
 
 ## Known unknowns → research spikes needed
-- {{UNKNOWN_1}}
-- {{UNKNOWN_2}}
+- Why do I trust the issuer? Explicit trust anchors (each agent configures which issuers count) is the honest, simple answer. Transitive vouching (A is vouched by B whom I trust) is richer but needs a depth limit and cycle handling. Current plan: anchors first in M4, then one level of vouching, since the brief names vouches explicitly.
+- Whether history attestations should influence the policy decision or only inform the human reading it. Letting observed history grant authority quietly recreates the reputation score the brief disqualifies, so the current lean is that history is displayed and may tighten a decision, but never loosens one.
 
 ## Assumptions never stated aloud (agent-inferred from answers above)
 <!-- Agent fills this: list 3-5 implicit assumptions it drew from the answers. -->
-- {{ASSUMPTION_1}}
-- {{ASSUMPTION_2}}
-- {{ASSUMPTION_3}}
+- Judges will open the live URL rather than clone the repo, so the deployed demo has to carry the explanation on its own, without a README beside it.
+- Key distribution is out of scope: did:key means the identifier IS the public key, so there is no resolution step to get wrong and no registry to stand up.
+- Deterministic agents are a feature, not a shortcut. Putting an LLM in the trust path would make the demo non-reproducible and would weaken exactly the claim being made — that the decision follows from evidence and policy.
 ```
