@@ -72,6 +72,22 @@ const BASE64URL_PATTERN = /^[A-Za-z0-9_-]*=*$/;
  * a `RangeError` for anything outside the base64url alphabet or with an
  * invalid length — never returns a truncated or garbage byte array for
  * malformed input.
+ *
+ * NOT CANONICAL: this decoder does not require the unused low bits of a
+ * partial final character to be zero (RFC 4648 §3.5 says an encoder
+ * SHOULD set them to zero but does not require a decoder to reject
+ * nonzero ones). Consequently multiple distinct strings can decode to
+ * the same bytes — e.g. 16 different 2-character inputs all decode to
+ * the single byte `0x68`. This is NOT exploitable in this module's own
+ * use (`jws.ts`'s compact JWS): a JWS signature covers the literal
+ * base64url *string* that was transmitted, not the bytes it decodes to,
+ * so a non-canonical payload segment just verifies (or fails to verify)
+ * as the different string it actually is — there is no pair of distinct
+ * encodings of the same underlying bytes that both validate as the same
+ * signed token. Anyone reusing this decoder OUTSIDE that context —
+ * anywhere a decoded byte value, not the encoded string, is what gets
+ * compared, hashed, or looked up — must not assume distinct inputs
+ * decode to distinct outputs.
  */
 export function decodeBase64Url(value: string): Uint8Array {
   if (typeof value !== "string" || !BASE64URL_PATTERN.test(value)) {
