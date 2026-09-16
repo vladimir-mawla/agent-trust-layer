@@ -1,0 +1,40 @@
+# Node
+node_modules/
+.next/
+dist/
+out/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Secrets & cryptographic key material
+# This project implements a verifiable trust layer for AI agents (identity,
+# credentials, scoped authority) — real private keys, signing keys, and
+# credential secrets WILL be generated and used locally during development.
+# None of that material may ever be committed, even accidentally.
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jwk
+id_rsa
+id_ed25519
+*.crt.key
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor junk
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Vercel
+.vercel
