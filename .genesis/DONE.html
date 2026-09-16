@@ -72,10 +72,15 @@
     <table>
       <thead><tr><th>#</th><th>Milestone</th><th>Phase</th><th>Demo command (proves it works)</th><th>Loops</th><th>Status</th></tr></thead>
       <tbody>
-        <tr><td>M1</td><td>{{M1_NAME}}</td><td>{{M1_PHASE}}</td><td><code>{{M1_DEMO}}</code></td><td>L1, L4</td><td><span class="pill">todo</span></td></tr>
-        <tr><td>M2</td><td>{{M2_NAME}}</td><td>{{M2_PHASE}}</td><td><code>{{M2_DEMO}}</code></td><td>L1, L3, L4</td><td><span class="pill">todo</span></td></tr>
-        <tr><td>M3</td><td>{{M3_NAME}}</td><td>{{M3_PHASE}}</td><td><code>{{M3_DEMO}}</code></td><td>L1, L2, L4</td><td><span class="pill">todo</span></td></tr>
-        <tr><td>…</td><td>add rows as the plan is sliced</td><td></td><td></td><td></td><td></td></tr>
+        <tr><td>M1</td><td>Identity: did:key and proof of possession</td><td>BUILD</td><td><code>npm test -- identity</code></td><td>L1, L4</td><td><span class="pill">todo</span></td></tr>
+        <tr><td>M2</td><td>Deploy a live skeleton to Vercel</td><td>DEPLOY</td><td><code>curl -sf $DEPLOY_URL/api/health</code></td><td>L1, L3, L4</td><td><span class="pill">todo</span></td></tr>
+        <tr><td>M3</td><td>Verifiable credentials: issue and verify</td><td>BUILD</td><td><code>npm test -- credentials</code></td><td>L1, L4</td><td><span class="pill">todo</span></td></tr>
+        <tr><td>M4</td><td>Revocation and trust anchors</td><td>BUILD</td><td><code>npm test -- trust</code></td><td>L1, L4</td><td><span class="pill">todo</span></td></tr>
+        <tr><td>M5</td><td>Policy engine with explanations</td><td>BUILD</td><td><code>npm test -- policy</code></td><td>L1, L4</td><td><span class="pill">todo</span></td></tr>
+        <tr><td>M6</td><td>Cross-agent negotiation</td><td>INTEGRATE</td><td><code>npm run demo:negotiation</code></td><td>L1, L4</td><td><span class="pill">todo</span></td></tr>
+        <tr><td>M7</td><td>The attack suite</td><td>VERIFY</td><td><code>npm test -- attacks</code></td><td>L1, L4</td><td><span class="pill">todo</span></td></tr>
+        <tr><td>M8</td><td>The demo UI</td><td>BUILD</td><td><code>curl -sf $DEPLOY_URL/ | grep -c 'data-testid="decision"'</code></td><td>L1, L3, L4</td><td><span class="pill">todo</span></td></tr>
+        <tr><td>M9</td><td>Deliverables</td><td>RELEASE</td><td><code>git clone ... && npm ci && npm run typecheck && npm test</code></td><td>L1, L4</td><td><span class="pill">todo</span></td></tr>
       </tbody>
     </table>
     <p class="note">Total token budget = (n milestones × 50000). Update <span class="pill wip">wip</span> /
