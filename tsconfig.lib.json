@@ -16,6 +16,18 @@
     "lib": ["ES2022"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    /* M3 note: TypeScript's automatic "include every ambient @types/*
+       package" behavior turns out NOT to fire for this config (verified
+       with `tsc --listFiles`: zero @types/node files were loaded) —
+       M1 never noticed because lib/identity never referenced a Node
+       global (no Buffer, no TextDecoder). M3's JWS layer needs
+       `TextDecoder` (a real Node AND browser global, unlike
+       `atob`/`btoa`, which are typed only via lib.dom.d.ts and are
+       deliberately NOT used here for exactly that reason — see
+       lib/credentials/base64url.ts's own comment). Naming "node"
+       explicitly is the standard fix for that gap; it adds no
+       DOM-shaped typings and loosens no strictness flag below. */
+    "types": ["node"],
 
     /* Strictness — non-negotiable per project ground rules. */
     "strict": true,
