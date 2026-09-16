@@ -1,0 +1,24 @@
+{
+  "name": "agent-trust-layer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A verifiable trust layer for AI agents: self-certifying identity, credentials, revocation, and explainable policy.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "multiformats": "14.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.3",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  }
+}

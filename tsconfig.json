@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    /* Language / module target.
+       NodeNext resolution mirrors how Node actually resolves ESM at runtime
+       (explicit ".js" extensions on relative imports, package "exports"
+       maps honoured) so `tsc --noEmit` catches resolution mistakes that a
+       looser setting like "bundler" would hide until Next.js runs it. */
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+
+    /* Strictness — non-negotiable per project ground rules. */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+
+    /* Emit nothing — this project only ever runs through tsx/vitest/Next's
+       own compiler. `npm run typecheck` exists purely to type-check. */
+    "noEmit": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true
+  },
+  "include": ["lib/**/*.ts"]
+}
