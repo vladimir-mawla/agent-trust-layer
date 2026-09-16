@@ -34,6 +34,17 @@ export interface VerificationFailure {
   readonly cause?: unknown;
 }
 
+/**
+ * `ok: true` means the credential is internally consistent and
+ * correctly signed — NOT that the issuer is trustworthy. Nothing in M3
+ * vets who is allowed to issue what; `verifiedIssuer` below is exactly
+ * who cryptographically signed the credential, which could be anyone
+ * who can generate an Ed25519 keypair. Deciding whether that issuer
+ * should be believed is M4's job (trust anchors / issuer vetting) — see
+ * the module comment's `no-unverified-claim-reaches-policy` note, which
+ * is about M5 trusting `verify.ts`'s output, not about `verify.ts`
+ * itself vouching for the issuer's trustworthiness.
+ */
 export interface VerificationSuccess<C extends AnyCredential> {
   readonly ok: true;
   /** The verified credential. Safe to read every field of — reaching
@@ -43,7 +54,9 @@ export interface VerificationSuccess<C extends AnyCredential> {
   /** The issuer's DID, recovered from — and confirmed to match — the key
    *  that produced the signature (not merely copied from the credential's
    *  own `issuer` field: `verify.ts`'s issuer-identity step is exactly
-   *  the check that these agree). */
+   *  the check that these agree). This is proof the named issuer signed
+   *  the credential, NOT that the named issuer is trusted or vetted —
+   *  see this interface's own doc comment. */
   readonly verifiedIssuer: Did;
   /** The presenter's DID, established by `lib/identity`'s
    *  `verifyPossession` — i.e. cryptographically proven, not merely
