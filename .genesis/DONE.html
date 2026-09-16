@@ -51,14 +51,19 @@
   <h2>2 · Definition of Done (binary gates — checked by the VERIFIER, not the maker)</h2>
   <div class="card">
     <div class="gate"><span class="box"></span><span class="label">Dependency direction inward, zero cycles <span class="note">(modular-architecture gate)</span></span></div>
-    <div class="gate"><span class="box"></span><span class="label">Every outbound call has a timeout / circuit-breaker <span class="note">(production-readiness gate)</span></span></div>
-    <div class="gate"><span class="box"></span><span class="label">All LLM/structured outputs validated against a schema <span class="note">(llmops gate)</span></span></div>
-    <div class="gate"><span class="box"></span><span class="label">Threat model written; prompt-injection / untrusted-input considered <span class="note">(security gate)</span></span></div>
-    <div class="gate"><span class="box"></span><span class="label"><code>{{TYPECHECK_CMD}}</code> clean AND <code>{{TEST_CMD}}</code> green in CI</span></div>
+    <div class="gate"><span class="box"></span><span class="label"><code>npm run typecheck</code> clean AND <code>npm test</code> green in CI</span></div>
     <div class="gate"><span class="box"></span><span class="label">One <code>verify</code> pass by a <b>separate</b> agent/model (L4)</span></div>
     <div class="gate"><span class="box"></span><span class="label">No <code>context-graph.json</code> invariant violated by the change</span></div>
-    <p class="note">A milestone is DONE only when every box above is checked by the verifier. Pull each
-       gate from the relevant <code>agentic-swe-master</code> phase gate.</p>
+    <div class="gate"><span class="box"></span><span class="label">Every credential's signature is verified before any claim inside it is read <span class="note">(trust-boundary gate)</span></span></div>
+    <div class="gate"><span class="box"></span><span class="label">A presentation that replays another agent's credential is rejected on subject binding <span class="note">(anti-replay gate)</span></span></div>
+    <div class="gate"><span class="box"></span><span class="label">A spoofed agent presenting a copied DID is rejected at proof-of-possession, before any credential is even examined <span class="note">(anti-impersonation gate)</span></span></div>
+    <div class="gate"><span class="box"></span><span class="label">Every trust decision returns a structured explanation naming the rule and the credential field <span class="note">(explainability gate — no bare booleans)</span></span></div>
+    <div class="gate"><span class="box"></span><span class="label">No private key material appears in any response, log, or committed file, provable by grep over the full history <span class="note">(key-hygiene gate)</span></span></div>
+    <div class="gate"><span class="box"></span><span class="label">The live demo URL returns 200 to an anonymous request <span class="note">(deliverable gate — the brief requires a live demo)</span></span></div>
+    <div class="gate"><span class="box"></span><span class="label">A clean clone plus install plus test passes with no credentials configured <span class="note">(clean-clone gate)</span></span></div>
+    <p class="note">A milestone is DONE only when every box above is checked by the verifier. There is
+       deliberately no LLM in the trust path, so the llmops schema-validation gate and the
+       timeout/circuit-breaker gate from the generic template do not apply here and were dropped.</p>
   </div>
 
   <!-- ───────────── IMPLEMENTATION PLAN ───────────── -->
