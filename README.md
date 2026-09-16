@@ -32,23 +32,23 @@ reputation score this design exists to avoid.
 Four layers, each depending only on the one below it:
 
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│ 4. POLICY          rules over verified claims                      │
-│                     → every decision names the rule that fired     │
-│                       and the credential field that decided it     │
-├───────────────────────────────────────────────────────────────────┤
-│ 3. VERIFICATION     signature · expiry · revocation ·               │
-│                      subject binding · freshness                    │
-│                     → fail closed: unverifiable == expired ==       │
-│                       revoked == malformed == absent                │
-├───────────────────────────────────────────────────────────────────┤
-│ 2. CLAIMS           W3C Verifiable Credentials, signed               │
-│                      Authority (may you?)   History (should I?)      │
-├───────────────────────────────────────────────────────────────────┤
-│ 1. IDENTITY         did:key + Ed25519                                │
-│                      the identifier IS the public key —              │
-│                      no registry, no network call, no resolution     │
-└───────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ 4. POLICY          rules over verified claims                   │
+│                     -> every decision names the rule that fired │
+│                        and the credential field that decided it │
+├─────────────────────────────────────────────────────────────────┤
+│ 3. VERIFICATION    signature · expiry · revocation ·            │
+│                     subject binding · freshness                 │
+│                    -> fail closed: unverifiable == expired ==   │
+│                       revoked == malformed == absent            │
+├─────────────────────────────────────────────────────────────────┤
+│ 2. CLAIMS          W3C Verifiable Credentials, signed           │
+│                     Authority (may you?)   History (should I?)  │
+├─────────────────────────────────────────────────────────────────┤
+│ 1. IDENTITY        did:key + Ed25519                            │
+│                     the identifier IS the public key —          │
+│                     no registry, no network call, no resolution │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 **1. Identity.** Agents are identified by `did:key`, a DID method whose identifier is derived
