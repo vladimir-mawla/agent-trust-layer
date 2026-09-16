@@ -49,7 +49,7 @@ Publish claims and revocations to a blockchain so any party can read the shared,
   from, and that signing a challenge with the WRONG key fails verification.
 - **Loops:** L1, L4
 - **Skills:** canon + tdd + security-engineering
-- **Token budget:** 50000
+- **Token budget:** 150000
 
 ### M2 — Deploy a live skeleton to Vercel
 - **Outcome:** A minimal Next.js app with a health endpoint, deployed, with a real public URL.
@@ -62,7 +62,7 @@ Publish claims and revocations to a blockchain so any party can read the shared,
   **Needs a Vercel account.**
 - **Loops:** L1, L3 (research), L4
 - **Skills:** canon + tdd + production-readiness
-- **Token budget:** 50000
+- **Token budget:** 150000
 
 ### M3 — Verifiable credentials: issue and verify
 - **Outcome:** W3C VC data model, signed as JWTs with Ed25519. Two credential types: authority
@@ -75,7 +75,7 @@ Publish claims and revocations to a blockchain so any party can read the shared,
   passes.
 - **Loops:** L1, L4
 - **Skills:** canon + tdd + security-engineering
-- **Token budget:** 50000
+- **Token budget:** 150000
 
 ### M4 — Revocation and trust anchors
 - **Outcome:** A revocation mechanism, plus each agent's configurable set of trusted issuers.
@@ -86,7 +86,7 @@ Publish claims and revocations to a blockchain so any party can read the shared,
   authority credential from an untrusted issuer is refused.
 - **Loops:** L1, L4
 - **Skills:** canon + tdd + security-engineering
-- **Token budget:** 50000
+- **Token budget:** 150000
 
 ### M5 — Policy engine with explanations
 - **Outcome:** Rules over verified claims. Never a bare boolean: every decision carries the rule
@@ -98,7 +98,7 @@ Publish claims and revocations to a blockchain so any party can read the shared,
   exact credential field.
 - **Loops:** L1, L4
 - **Skills:** canon + tdd + clean-architecture
-- **Token budget:** 50000
+- **Token budget:** 150000
 
 ### M6 — Cross-agent negotiation
 - **Outcome:** Two agents, a Buyer and a Supplier, with the Supplier holding a policy. The
@@ -110,7 +110,7 @@ Publish claims and revocations to a blockchain so any party can read the shared,
 - **Success criteria:** the scripted run prints all four outcomes with their reasons, in order.
 - **Loops:** L1, L4
 - **Skills:** canon + tdd + distributed-systems
-- **Token budget:** 50000
+- **Token budget:** 150000
 
 ### M7 — The attack suite
 - **Outcome:** At least these attacks, each caught by a NAMED mechanism: forged signature,
@@ -124,7 +124,7 @@ Publish claims and revocations to a blockchain so any party can read the shared,
   not merely refused.
 - **Loops:** L1, L4
 - **Skills:** canon + tdd + security-engineering
-- **Token budget:** 50000
+- **Token budget:** 150000
 
 ### M8 — The demo UI
 - **Outcome:** Make the trust decision visible and explainable in 90 seconds: the decision, the
@@ -136,7 +136,7 @@ Publish claims and revocations to a blockchain so any party can read the shared,
   decision's explanation; the grep count is 4. **Needs a Vercel account** (reuses M2's deployment).
 - **Loops:** L1, L3 (research), L4
 - **Skills:** canon + tdd + design-system (MANDATORY for frontend)
-- **Token budget:** 50000
+- **Token budget:** 150000
 
 ### M9 — Deliverables
 - **Outcome:** Architecture snapshot (identity to claims to verification to policy), the
@@ -148,7 +148,7 @@ Publish claims and revocations to a blockchain so any party can read the shared,
   credentials configured.
 - **Loops:** L1, L4
 - **Skills:** canon + tdd + documentation
-- **Token budget:** 50000
+- **Token budget:** 150000
 
 ---
 

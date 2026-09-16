@@ -113,7 +113,7 @@ Gates are **computed, not narrated** — run the command, paste the exit code. N
 - next_action: <the very next concrete step>
 - model: claude-haiku-4-5
 - tokens_used: 18420
-- tokens_budget: 50000
+- tokens_budget: 150000
 - skills_loaded: [agentic-swe-master, coding-orchestrator, ...]
 ```
 
@@ -181,7 +181,7 @@ if verify == REJECT: spawn(L2_DEBUG, scope=verify_feedback); retry_once()
 mark_milestone_done(); update_CURRENT(); append_progress_to_PLAN_and_notes()
 ```
 
-**Stop conditions:** success (demo passes + L4 APPROVE) · convergence failure (3 G2 strikes) · budget (50000 tokens OR 10 iterations).
+**Stop conditions:** success (demo passes + L4 APPROVE) · convergence failure (3 G2 strikes) · budget (150000 tokens OR 10 iterations).
 
 ---
 
@@ -337,7 +337,7 @@ pass: read every wiki page, flag stale entries, surface gaps. Write findings to 
 ## Live Visibility — what the user sees during a loop
 
 ```
-┌─ L1 BUILD · {{MILESTONE_ID}} · iter 3/10 ─ claude-haiku-4-5 ─ 18.4k/50000 ─┐
+┌─ L1 BUILD · {{MILESTONE_ID}} · iter 3/10 ─ claude-haiku-4-5 ─ 18.4k/150000 ─┐
 │ skills: agentic-swe-master, coding-orchestrator, tdd                                                  │
 │ phase:  <current phase>                                                                            │
 │ G1 ✓  G2 ✓ (+84 LOC, +6 tests)  G3 ✓  G4 ✓ (tests 6/6)  G5 ⏸                                       │

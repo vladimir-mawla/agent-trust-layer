@@ -7,5 +7,5 @@
 - next_action: L4 verify on M1 (separate agent/model; DONE.html section 2 gates + context-graph.json invariants are the checklist — DONE.html/PLAN.md are locked and were not edited by this pass)
 - model: claude-sonnet-5
 - tokens_used: ~137000
-- tokens_budget: 50000
+- tokens_budget: 150000
 - skills_loaded: []
