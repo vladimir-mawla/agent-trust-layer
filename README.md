@@ -91,7 +91,7 @@ not exist yet, and nothing below claims otherwise.
 | # | Milestone | Status |
 |---|---|---|
 | M1 | Identity: `did:key` + proof of possession | **Done.** Built and independently verified (see below). |
-| M2 | Deploy a live skeleton to Vercel | Built locally (health endpoint, Next.js app). Not yet deployed — no live URL exists. |
+| M2 | Deploy a live skeleton to Vercel | **Done.** Live at https://agent-trust-layer-pi.vercel.app, auto-deploying on push. |
 | M3 | Verifiable credentials: issue and verify | Not started. |
 | M4 | Revocation and trust anchors | Not started. |
 | M5 | Policy engine with explanations | Not started. |
