@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createChallenge, encodeDidKey, generateKeyPair, provePossession, type Did, type ProofOfPossession } from "../identity/index.js";
-import { issueAuthorityCredential } from "../credentials/index.js";
+import { issueAuthorityCredential, issueHistoryAttestation } from "../credentials/index.js";
 import { TrustAnchorSet } from "./anchors.js";
 import { issueStatusListCredential } from "./status-list.js";
 import { issueVouch } from "./vouch.js";
-import { evaluateAuthorityCredentialTrust } from "./trust-decision.js";
+import { evaluateAuthorityCredentialTrust, evaluateHistoryAttestationTrust } from "./trust-decision.js";
 
 interface Identity {
   readonly publicKey: Uint8Array;
@@ -228,5 +228,67 @@ describe("evaluateAuthorityCredentialTrust — M3 verification failures still su
     if (decision.accepted) throw new Error("expected refusal");
     if (decision.stage !== "credential-verification") throw new Error(`expected credential-verification stage, got ${decision.stage}`);
     expect(decision.credentialVerification.step).toBe("temporal");
+  });
+});
+
+describe("evaluateHistoryAttestationTrust — no anchor gate, but revocation still applies", () => {
+  it("accepts a verified history attestation from ANY issuer, with no anchor check at all", async () => {
+    const issuer = makeIdentity(); // deliberately NOT in any anchor set -- there is no anchors param here
+    const subject = makeIdentity();
+
+    const jwt = issueHistoryAttestation({
+      issuerPrivateKey: issuer.privateKey,
+      issuerDid: issuer.did,
+      subjectDid: subject.did,
+      observationType: "transactions-completed",
+      metrics: { count: 47, disputes: 0 },
+      now: 0,
+    });
+
+    const decision = await evaluateHistoryAttestationTrust({
+      jwt,
+      presenterProof: proofOfPossessionFor(subject, 0),
+      now: 0,
+    });
+
+    expect(decision.accepted).toBe(true);
+    if (!decision.accepted) throw new Error("expected acceptance");
+    expect(decision.revocation.outcome).toBe("not-checked");
+  });
+
+  it("refuses a revoked history attestation even though there is no issuer-trust gate for history", async () => {
+    const issuer = makeIdentity();
+    const subject = makeIdentity();
+
+    const jwt = issueHistoryAttestation({
+      issuerPrivateKey: issuer.privateKey,
+      issuerDid: issuer.did,
+      subjectDid: subject.did,
+      observationType: "transactions-completed",
+      metrics: { count: 47, disputes: 0 },
+      now: 0,
+    });
+
+    const statusListJwt = issueStatusListCredential({
+      issuerPrivateKey: issuer.privateKey,
+      issuerDid: issuer.did,
+      statusPurpose: "revocation",
+      sizeBits: 128,
+      revokedIndices: [9],
+      now: 0,
+    });
+
+    const decision = await evaluateHistoryAttestationTrust({
+      jwt,
+      presenterProof: proofOfPossessionFor(subject, 0),
+      credentialStatus: { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 9, statusListCredential: STATUS_LIST_URL },
+      statusListResolver: async () => statusListJwt,
+      now: 0,
+    });
+
+    expect(decision.accepted).toBe(false);
+    if (decision.accepted) throw new Error("expected refusal");
+    if (decision.stage !== "revocation") throw new Error(`expected revocation stage, got ${decision.stage}`);
+    expect(decision.revocation.outcome).toBe("revoked");
   });
 });
