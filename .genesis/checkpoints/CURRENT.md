@@ -1,11 +1,11 @@
 # CURRENT
-- active_loop: NONE
+- active_loop: L1 BUILD
 - target: M1
-- iteration: 0
-- last_gate: —
-- last_action: genesis G0-G6 complete
-- next_action: run G0 existence pre-flight on M1
-- model: claude-haiku-4-5
-- tokens_used: 0
+- iteration: 1
+- last_gate: L1 BUILD self-checks green (typecheck clean, npm test 29/29 green, npm test -- identity 29/29 green, lib framework-free, no forbidden tracked files, no private key material in history) — L4 VERIFY by a separate agent/model still required before M1 is marked done in DONE.html
+- last_action: L1 BUILD on M1 complete — scaffolded package.json/tsconfig.json/vitest, implemented lib/identity/{errors,keys,did-key,challenge,index}.ts with @noble/curves + @noble/hashes + multiformats (all pinned exact versions), wrote 29 tests across 4 files (keys, did-key, did-key.vectors cross-checked against the W3C did-method-key spec's Ed25519 example, challenge), committed in 6 granular commits (41cf0c5..2db8db4), all gates re-verified against the final clean tree
+- next_action: L4 verify on M1 (separate agent/model; DONE.html section 2 gates + context-graph.json invariants are the checklist — DONE.html/PLAN.md are locked and were not edited by this pass)
+- model: claude-sonnet-5
+- tokens_used: ~137000
 - tokens_budget: 50000
 - skills_loaded: []
