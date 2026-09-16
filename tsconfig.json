@@ -1,16 +1,47 @@
 {
-  "compilerOptions": {
-    /* Language / module target.
-       NodeNext resolution mirrors how Node actually resolves ESM at runtime
-       (explicit ".js" extensions on relative imports, package "exports"
-       maps honoured) so `tsc --noEmit` catches resolution mistakes that a
-       looser setting like "bundler" would hide until Next.js runs it. */
-    "target": "ES2022",
-    "lib": ["ES2022"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+  /* M2 note: this root tsconfig.json is Next.js's config, not lib/'s.
+     `lib/` kept its original strict NodeNext config verbatim — see
+     tsconfig.lib.json for why and what "npm run typecheck" now does with
+     both files.
 
-    /* Strictness — non-negotiable per project ground rules. */
+     Why this file differs from tsconfig.lib.json:
+       - moduleResolution "bundler" / module "esnext" (instead of NodeNext)
+         because Next.js compiles `app/**` through webpack/Turbopack, never
+         through Node's own ESM loader — "bundler" is the resolution
+         algorithm that actually matches how this code runs. TypeScript's
+         "bundler" mode also resolves an extension-ful relative import like
+         "../../lib/identity/index.js" straight to "index.ts", so the
+         route handler can import lib/identity's NodeNext-style ".js"
+         specifiers with no changes to lib/ at all.
+       - "jsx": "react-jsx" and the "next" plugin: Next.js's own build
+         step enforces this jsx mode itself (it rewrote this file to set
+         it — see the mandatory-changes note `next build` prints) so its
+         compiler emits the React automatic-runtime JSX, and so
+         `.next/types` gets picked up for typed routes. Next.js also
+         freely rewrites this file's `include` array on every build/dev
+         run (e.g. adding an extra `.next/dev/types` glob entry) — that
+         is expected and is not something to revert.
+     What this costs: this config no longer catches the one specific class
+     of mistake NodeNext resolution exists to catch inside app/** — a
+     relative import that would fail to resolve under Node's own ESM
+     loader (e.g. a missing ".js" extension). That check still runs, just
+     narrowed to lib/ via tsconfig.lib.json, because app/** never executes
+     under Node's raw ESM loader (Next.js's bundler runs it), so the
+     narrower NodeNext guarantee wasn't protecting against a real failure
+     mode for app code in the first place. Every strictness flag
+     (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
+     etc.) is kept as-is — nothing here is a loosening of type safety,
+     only of which module-resolution algorithm is simulated. */
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "ES2022"
+    ],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    /* Strictness — identical to tsconfig.lib.json. Not relaxed. */
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -18,14 +49,29 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true,
-
-    /* Emit nothing — this project only ever runs through tsx/vitest/Next's
-       own compiler. `npm run typecheck` exists purely to type-check. */
     "noEmit": true,
     "isolatedModules": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "allowJs": true,
+    "incremental": true,
+    "jsx": "react-jsx",
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
   },
-  "include": ["lib/**/*.ts"]
+  "include": [
+    "next-env.d.ts",
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "next.config.ts",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }
