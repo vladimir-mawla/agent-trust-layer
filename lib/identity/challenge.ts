@@ -115,6 +115,11 @@ export function provePossession(privateKey: Uint8Array, did: Did, challenge: Cha
  *      correctly-signed challenge with the WRONG key's DID (or a
  *      differently-signed one against the right DID) must fail here.
  *
+ * REPLAY LIMITATION: This function does not deduplicate nonces or track
+ * seen proofs. A captured proof CAN be replayed within its TTL. For
+ * single-use semantics, the caller must record and reject previously-seen
+ * nonces (out of scope here: this module must work with no storage).
+ *
  * Returns the verified public key on success; throws otherwise.
  */
 export function verifyPossession(
