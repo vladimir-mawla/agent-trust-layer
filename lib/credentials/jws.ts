@@ -13,15 +13,22 @@
  * decodes the payload segment to raw bytes (never `JSON.parse`s it).
  * `verifySignature` returns a `SignatureVerified` witness token — an
  * object of a type nothing outside this module can construct — and
- * `decodeVerifiedPayload` requires that token as an argument. There is
- * therefore no code path, anywhere that imports this module, that can
- * reach a parsed payload object without having first produced a witness
- * that the signature over its exact bytes was checked. This is the same
- * "a type doesn't cross a trust boundary for free" principle
+ * `decodeVerifiedPayload` requires that token as an argument. This is a
+ * TYPE-LEVEL guarantee, not a runtime one: `decodeVerifiedPayload` never
+ * inspects its `_proof` argument at runtime, so the guarantee holds for
+ * every caller that type-checks, and does NOT hold against a caller that
+ * casts past the type system (e.g. `as any`). That's sufficient here,
+ * deliberately: every caller of this module lives inside this repo and
+ * is type-checked in CI, so there is no external or dynamically-loaded
+ * caller for an `as any` cast to matter — adding a runtime check of an
+ * unforgeable-by-construction token would just be re-proving at runtime
+ * what the compiler already proved at every real call site. This is the
+ * same "a type doesn't cross a trust boundary for free" principle
  * `lib/identity/did-key.ts`'s `Did` type documents — applied here in the
  * opposite direction: instead of a type that must be re-validated before
- * it's trusted, this is a type that CANNOT be constructed except as
- * evidence that validation already happened.
+ * it's trusted, this is a type that, for any code that respects the type
+ * system, CANNOT be constructed except as evidence that validation
+ * already happened.
  */
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { utf8ToBytes } from "@noble/hashes/utils.js";
