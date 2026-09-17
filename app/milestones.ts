@@ -34,9 +34,9 @@ export const MILESTONES: readonly Milestone[] = [
   { id: "M2", title: "Live deployment", status: "done" },
   { id: "M3", title: "Verifiable credentials — issue and verify", status: "done" },
   { id: "M4", title: "Revocation and trust anchors", status: "done" },
-  { id: "M5", title: "Policy engine with explanations", status: "in-progress" },
-  { id: "M6", title: "Cross-agent negotiation", status: "queued" },
-  { id: "M7", title: "The attack suite", status: "queued" },
+  { id: "M5", title: "Policy engine with explanations", status: "done" },
+  { id: "M6", title: "Cross-agent negotiation", status: "done" },
+  { id: "M7", title: "The attack suite", status: "in-progress" },
   { id: "M8", title: "The interactive demo", status: "queued" },
   { id: "M9", title: "Architecture snapshot and thesis", status: "queued" },
 ] as const;
