@@ -588,3 +588,120 @@ describe("hostile request.scope accessors are refused, never thrown, at the Supp
     await expectRefusedNotThrown(scope);
   });
 });
+
+// =========================================================================
+// FIX 3 (L4 M6 review, MEDIUM): a challenge is single-use. One issued
+// challenge plus one valid presentation used to be replayable against
+// arbitrarily many different requests, all permitted. `Supplier` is the
+// stateful, long-lived object for one session — this is where "may be
+// answered at most once" is now enforced.
+// =========================================================================
+describe("challenge single-use (FIX 3, L4 M6 review)", () => {
+  it("replaying the SAME valid presentation against the SAME challenge: first permitted, second refused at gate:challenge-single-use (distinct from gate:session-challenge and gate:proof-of-possession)", async () => {
+    const fixture = buildFourBeatFixture(NOW);
+    const challenge = fixture.supplier.issueChallenge();
+    const proof = fixture.buyer.provePossession(challenge);
+    const presentation: Presentation = {
+      proof,
+      credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus },
+    };
+    const request: NegotiationRequest = { action: ACTION, scope: { amount: 100 } };
+
+    const first = await fixture.supplier.evaluatePresentation(challenge, presentation, request);
+    expect(first.stage).toBe("policy");
+    expect(first.permitted).toBe(true);
+
+    const second = await fixture.supplier.evaluatePresentation(challenge, presentation, request);
+    expect(second.stage).toBe("proof-of-possession");
+    expect(second.permitted).toBe(false);
+    if (second.stage === "proof-of-possession") {
+      expect(second.rule.ruleId).toBe("gate:challenge-single-use");
+      expect(second.rule.ruleId).not.toBe("gate:session-challenge");
+      expect(second.rule.ruleId).not.toBe("gate:proof-of-possession");
+    }
+  });
+
+  it("consumption happens even when the FIRST attempt is refused for an unrelated reason — a rejected attempt cannot be retried", async () => {
+    const fixture = buildFourBeatFixture(NOW);
+    const challenge = fixture.supplier.issueChallenge();
+    const proof = fixture.buyer.provePossession(challenge);
+    const credentials = { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus };
+
+    // First attempt: a genuine, correctly-bound presentation for THIS
+    // challenge, but refused at the POLICY stage (over-scope) — not a
+    // proof-of-possession failure.
+    const overScopeRequest: NegotiationRequest = { action: ACTION, scope: { amount: 999_999 } };
+    const first = await fixture.supplier.evaluatePresentation(challenge, { proof, credentials }, overScopeRequest);
+    expect(first.stage).toBe("policy");
+    expect(first.permitted).toBe(false);
+
+    // Retrying the SAME challenge with a request that WOULD have been
+    // permitted is refused anyway — the nonce was already spent by the
+    // first (refused) attempt.
+    const wouldHavePermittedRequest: NegotiationRequest = { action: ACTION, scope: { amount: 1 } };
+    const retry = await fixture.supplier.evaluatePresentation(challenge, { proof, credentials }, wouldHavePermittedRequest);
+    expect(retry.stage).toBe("proof-of-possession");
+    expect(retry.permitted).toBe(false);
+    if (retry.stage === "proof-of-possession") {
+      expect(retry.rule.ruleId).toBe("gate:challenge-single-use");
+    }
+  });
+
+  it("replay after the challenge has expired is still refused (the natural expiry check backstops the single-use gate even once its own bookkeeping entry has been pruned)", async () => {
+    // A mutable options object lets this SAME Supplier instance observe
+    // time passing — proving the refusal holds independent of whether
+    // the consumed-nonce bookkeeping entry itself is still tracked (see
+    // `#pruneExpiredNonces`'s own comment on bounded memory).
+    const fixture = buildFourBeatFixture(NOW);
+    const options = { policy: fixture.policy, anchors: fixture.anchors, statusListResolver: fixture.resolver, now: NOW };
+    const supplier = new Supplier(options);
+
+    const shortLivedChallenge = supplier.issueChallenge({ ttlMs: 1_000 });
+    const proof = fixture.buyer.provePossession(shortLivedChallenge);
+    const presentation: Presentation = {
+      proof,
+      credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus },
+    };
+    const request: NegotiationRequest = { action: ACTION, scope: { amount: 1 } };
+
+    const first = await supplier.evaluatePresentation(shortLivedChallenge, presentation, request);
+    expect(first.permitted).toBe(true);
+
+    // Advance this SAME Supplier's clock well past the challenge's TTL
+    // (and past its own pruning window) before replaying.
+    options.now = NOW + 60_000;
+    const replay = await supplier.evaluatePresentation(shortLivedChallenge, presentation, request);
+    expect(replay.permitted).toBe(false);
+    expect(replay.stage).toBe("proof-of-possession");
+  });
+
+  it("two different challenges in flight concurrently both work — consuming one nonce never affects the other", async () => {
+    const fixture = buildFourBeatFixture(NOW);
+    const challengeA = fixture.supplier.issueChallenge();
+    const challengeB = fixture.supplier.issueChallenge();
+    expect(challengeA.nonce).not.toBe(challengeB.nonce);
+
+    const proofA = fixture.buyer.provePossession(challengeA);
+    const proofB = fixture.buyer.provePossession(challengeB);
+    const credentials = { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus };
+
+    const decisionA = await fixture.supplier.evaluatePresentation(challengeA, { proof: proofA, credentials }, { action: ACTION, scope: { amount: 10 } });
+    const decisionB = await fixture.supplier.evaluatePresentation(challengeB, { proof: proofB, credentials }, { action: ACTION, scope: { amount: 20 } });
+
+    expect(decisionA.stage).toBe("policy");
+    expect(decisionA.permitted).toBe(true);
+    expect(decisionB.stage).toBe("policy");
+    expect(decisionB.permitted).toBe(true);
+
+    // Both are now consumed — replaying EITHER is refused at the
+    // single-use gate, proving they were tracked independently rather
+    // than one nonce accidentally invalidating the other (or both
+    // sharing one slot).
+    const replayA = await fixture.supplier.evaluatePresentation(challengeA, { proof: proofA, credentials }, { action: ACTION, scope: { amount: 10 } });
+    const replayB = await fixture.supplier.evaluatePresentation(challengeB, { proof: proofB, credentials }, { action: ACTION, scope: { amount: 20 } });
+    expect(replayA.permitted).toBe(false);
+    expect(replayB.permitted).toBe(false);
+    if (replayA.stage === "proof-of-possession") expect(replayA.rule.ruleId).toBe("gate:challenge-single-use");
+    if (replayB.stage === "proof-of-possession") expect(replayB.rule.ruleId).toBe("gate:challenge-single-use");
+  });
+});

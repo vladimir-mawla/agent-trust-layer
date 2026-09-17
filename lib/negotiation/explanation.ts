@@ -62,6 +62,25 @@ export const GATE_PROOF_OF_POSSESSION: NegotiationRuleRef = {
     "the presenter must prove possession of the private key behind its claimed DID by signing this session's fresh challenge (M1); possessing or copying the DID string alone proves nothing",
 };
 
+/** A presented proof answers a challenge nonce THIS session did issue,
+ *  and the proof itself is even well-formed — but that exact nonce was
+ *  already consumed by an earlier `evaluatePresentation` call against
+ *  this same session (see `supplier.ts`'s `#consumedChallengeNonces`).
+ *  Distinct from `GATE_SESSION_CHALLENGE` (which fires for a nonce this
+ *  session never issued at all, or issued for a DIFFERENT challenge)
+ *  and from `GATE_PROOF_OF_POSSESSION` (a cryptographic failure) —
+ *  this one fires for a nonce that is genuinely this session's own, and
+ *  whose proof may even be genuinely valid, but which has already been
+ *  spent: `lib/identity/challenge.ts` deliberately does not track
+ *  nonces itself ("must work with no storage" — that module's own
+ *  comment), so the stateful, long-lived `Supplier` is where single-use
+ *  semantics are enforced (FIX 3, L4 M6 review). */
+export const GATE_CHALLENGE_ALREADY_CONSUMED: NegotiationRuleRef = {
+  ruleId: "gate:challenge-single-use",
+  description:
+    "a challenge may be answered by at most one presentation; a nonce this session already consumed — whether that earlier attempt was itself permitted or refused for some other reason — is refused here rather than allowing a captured-and-replayed presentation to be retried against the same still-unexpired challenge",
+};
+
 /** A `Presentation` whose `proof` (or `proof.challenge`) is missing or
  *  not even shaped like a proof at all — e.g. `undefined`, `null`, or a
  *  JSON value with no `challenge` object. Checked before `proof.did`/

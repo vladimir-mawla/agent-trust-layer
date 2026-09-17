@@ -6,6 +6,14 @@
  *
  *   1. **Session binding** — does this presentation's proof answer the
  *      EXACT challenge this session issued? (`GATE_SESSION_CHALLENGE`)
+ *   1.5. **Single-use** (FIX 3, L4 M6 review) — has THIS session already
+ *      consumed this exact nonce via an earlier `evaluatePresentation`
+ *      call? (`GATE_CHALLENGE_ALREADY_CONSUMED`) — see
+ *      `#consumedChallengeNonces`'s own comment for why this state lives
+ *      here and not in `lib/identity/challenge.ts`. The nonce is marked
+ *      consumed immediately after this check, before anything below can
+ *      refuse for a different reason, so a rejected attempt can never be
+ *      retried against the same challenge.
  *   2. **Proof of possession** — M1's `verifyPossession`, called
  *      DIRECTLY here, BEFORE either `presentation.credentials` field is
  *      ever read. This is what makes the brief's named "spoofed
@@ -50,7 +58,13 @@ import {
   type TrustAnchorSet,
 } from "../trust/index.js";
 import type { NegotiationDecision } from "./decision.js";
-import { GATE_MALFORMED_PRESENTATION, GATE_PROOF_OF_POSSESSION, GATE_SESSION_CHALLENGE, negotiationFieldEvidence } from "./explanation.js";
+import {
+  GATE_CHALLENGE_ALREADY_CONSUMED,
+  GATE_MALFORMED_PRESENTATION,
+  GATE_PROOF_OF_POSSESSION,
+  GATE_SESSION_CHALLENGE,
+  negotiationFieldEvidence,
+} from "./explanation.js";
 import type { NegotiationRequest, Presentation } from "./messages.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -176,8 +190,41 @@ function errorMessage(error: unknown): string {
 export class Supplier {
   readonly #options: SupplierOptions;
 
+  /**
+   * Nonces of challenges already answered by an evaluated presentation,
+   * mapped to that challenge's own `expiresAt` (FIX 3, L4 M6 review).
+   *
+   * `lib/identity/challenge.ts` deliberately does not track nonces
+   * itself — its own module comment says plainly "this module must work
+   * with no storage" and names the caller as responsible for single-use
+   * semantics. `Supplier` is exactly that: the stateful, long-lived
+   * object for one real negotiation session, unlike the stateless
+   * `createChallenge`/`verifyPossession` primitives. This is where "a
+   * challenge may be answered at most once" is actually enforced.
+   *
+   * Bounded memory: `#pruneExpiredNonces` (called at the top of every
+   * `evaluatePresentation`) drops every entry whose recorded
+   * `expiresAt` is at or before the CURRENT call's `now` — a consumed
+   * nonce is remembered only for as long as its own challenge's TTL
+   * could still matter, never indefinitely. Nothing is lost by pruning
+   * a nonce the instant it can no longer be replayed anyway: a replay
+   * of an EXPIRED challenge is refused regardless, by
+   * `verifyPossession`'s own `ChallengeExpiredError` check.
+   */
+  readonly #consumedChallengeNonces = new Map<string, number>();
+
   constructor(options: SupplierOptions) {
     this.#options = options;
+  }
+
+  /** Drop every consumed-nonce bookkeeping entry that cannot possibly
+   *  matter anymore — see `#consumedChallengeNonces`'s own comment. */
+  #pruneExpiredNonces(now: number): void {
+    for (const [nonce, expiresAt] of this.#consumedChallengeNonces) {
+      if (expiresAt <= now) {
+        this.#consumedChallengeNonces.delete(nonce);
+      }
+    }
   }
 
   /** Issue a fresh challenge for a new session — the first message of
@@ -196,6 +243,7 @@ export class Supplier {
    */
   async evaluatePresentation(issuedChallenge: Challenge, presentation: Presentation, request: NegotiationRequest): Promise<NegotiationDecision> {
     const now = this.#options.now ?? Date.now();
+    this.#pruneExpiredNonces(now);
     const rawProof: unknown = presentation?.proof;
 
     // --- Gate: the proof must at least be SHAPED like a proof before
@@ -231,6 +279,35 @@ export class Supplier {
         narrative: `the presented proof answers challenge nonce "${proof.challenge.nonce}", not "${issuedChallenge.nonce}" — the one this session actually issued; a proof captured from a different session (or replayed later) cannot be substituted here`,
       };
     }
+
+    // --- Gate: single-use (FIX 3, L4 M6 review) — this EXACT challenge,
+    //     confirmed above to be one this session genuinely issued, must
+    //     not already have been answered by an earlier evaluated
+    //     presentation. Checked before proof-of-possession (cheaper, and
+    //     logically prior: "has this already been spent" doesn't need a
+    //     signature check to answer).
+    if (this.#consumedChallengeNonces.has(issuedChallenge.nonce)) {
+      return {
+        stage: "proof-of-possession",
+        permitted: false,
+        claimedDid: proof.did,
+        rule: GATE_CHALLENGE_ALREADY_CONSUMED,
+        field: negotiationFieldEvidence("proof.challenge.nonce", {
+          actual: proof.challenge.nonce,
+          note: "this session already consumed this exact challenge nonce via an earlier evaluatePresentation call",
+        }),
+        narrative: `challenge nonce "${issuedChallenge.nonce}" was already answered by an earlier presentation to this session — a challenge may be answered at most once, so this replay is refused even though the nonce genuinely belongs to this session and has not yet expired`,
+      };
+    }
+    // Consume the nonce NOW — before proof-of-possession, credential
+    // trust, or policy are even evaluated — so that a presentation
+    // answering this genuine, unconsumed, correctly-bound challenge can
+    // never be retried after being refused for some OTHER reason (a bad
+    // signature, an untrusted issuer, over-scope, ...). This is what
+    // makes "consumption happens even when the presentation is later
+    // refused for another reason" true: nothing below this line can
+    // return without this nonce already being marked spent.
+    this.#consumedChallengeNonces.set(issuedChallenge.nonce, issuedChallenge.expiresAt);
 
     // --- Gate: proof of possession — the ONLY thing examined so far is
     //     `proof` itself. `presentation.credentials` has not been read
