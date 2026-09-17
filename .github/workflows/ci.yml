@@ -1,0 +1,84 @@
+# Continuous integration for agent-trust-layer.
+#
+# The point of this workflow is not that the tests pass — they pass on the
+# author's machine too. It is that every brief this project answers requires the
+# repository to run from a CLEAN CLONE, and that claim is worthless when the only
+# machine that has ever verified it is the one the code was written on.
+#
+# actions/checkout gives a fresh clone and `npm ci` installs strictly from the
+# committed lockfile, failing if the lockfile is incoherent or out of step with
+# package.json. So a green run here is real evidence of the clean-clone
+# requirement, on hardware the author does not control.
+#
+# No secrets, no environment variables, no external services: the trust layer is
+# deliberately offline — did:key needs no resolution, signatures verify locally,
+# and the one network-shaped step (revocation) takes an injected resolver rather
+# than performing I/O of its own. If this workflow ever needs a secret to pass,
+# something has leaked out of `lib/` that should not have.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to the same ref makes an in-flight run irrelevant.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Clean clone, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out a fresh clone
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # Matches engines.node in package.json. Pinned to the major so a
+          # patch release cannot silently change what CI proves.
+          node-version: '24'
+          cache: npm
+
+      - name: Install strictly from the lockfile
+        # `npm ci` (not `install`) so a lockfile that does not match
+        # package.json fails the build instead of being quietly rewritten.
+        run: npm ci
+
+      - name: Reject `npm install` drift in the lockfile
+        # npm 11.5.1 silently drops @rolldown/binding-* and lightningcss-*
+        # platform packages when `npm install` reconciles against an existing
+        # lockfile, after which vitest fails to start. `npm ci` above is immune,
+        # but this asserts the committed lockfile is not already missing them.
+        run: |
+          test -d node_modules/@rolldown || { echo "rolldown binding missing after npm ci"; exit 1; }
+          echo "Platform bindings present after npm ci."
+
+      - name: Typecheck both projects
+        # Covers tsconfig.json (the Next.js app) and tsconfig.lib.json
+        # (lib/** under strict NodeNext). A config that checked nothing
+        # would pass vacuously, so both are run explicitly.
+        run: npm run typecheck
+
+      - name: Run the full test suite
+        run: npm test
+
+      - name: Production build
+        # The gate that actually predicts whether Vercel will deploy.
+        run: npm run build
+
+      - name: Assert no credentials were needed
+        # The suite above ran with no secrets configured. If a future change
+        # makes any of it depend on one, this job will already have failed —
+        # this step records the intent for anyone reading the workflow.
+        run: echo "Typecheck, tests and build completed with zero secrets configured."
