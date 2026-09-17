@@ -70,9 +70,26 @@ export interface EvaluateAuthorityTrustInput {
   readonly maxStatusListAgeMs?: number;
 }
 
-/** Reported when no `credentialStatus`/`statusListResolver` pair was
- *  supplied at all — distinct from every `RevocationStatus` outcome in
- *  `status-list.ts`, all of which imply a check was actually attempted. */
+/**
+ * Reported when no `credentialStatus`/`statusListResolver` pair was
+ * supplied at all — distinct from every `RevocationStatus` outcome in
+ * `status-list.ts`, all of which imply a check was actually attempted.
+ *
+ * WARNING FOR M5 (the policy engine): a `TrustDecision`/`HistoryTrustDecision`
+ * with `revocation.outcome === "not-checked"` can still have
+ * `accepted: true` — that is correct and honestly labelled for M4's own
+ * scope (a caller who never wired up revocation gets exactly what they
+ * asked for, not a silent, unearned "and it's not revoked either"). But
+ * `not-checked` is NOT the same claim as `active` ("checked and clean"),
+ * and M5's policy engine, if it naively treats every `accepted: true`
+ * decision as equally fully-vetted, will silently swallow that
+ * distinction and treat a genuinely unchecked credential as if its
+ * revocation status were known good. `not-checked` must be surfaced to
+ * M5's policy layer as its own explicit input, requiring a deliberate
+ * policy decision (e.g. "refuse if revocation was never checked for
+ * this action class"), never quietly folded into "accepted, therefore
+ * fine."
+ */
 export interface RevocationNotChecked {
   readonly outcome: "not-checked";
   readonly reason: string;
