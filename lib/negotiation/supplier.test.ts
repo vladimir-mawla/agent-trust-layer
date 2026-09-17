@@ -200,13 +200,21 @@ describe("fail-closed: nothing throws for a malformed or hostile message", () =>
     "x".repeat(200_000), // exceeds MAX_JWS_LENGTH
   ];
 
-  it.each(hostileAuthorityJwts)("evaluatePresentation resolves (never throws/rejects) for authorityJwt=%j", async (jwt) => {
+  it.each(hostileAuthorityJwts)("evaluatePresentation resolves refused (never throws/rejects) for authorityJwt=%j", async (jwt) => {
+    // The outcome here is fully knowable, not merely "it resolves": the
+    // attacker proves possession of its OWN did honestly (proof-of-
+    // possession passes), so control reaches the policy stage, where
+    // every one of these garbage strings fails M3's own credential
+    // verification (never throws — returns a structured failure) and is
+    // refused as "credential-verification-failed". Strengthened per FIX
+    // 2's audit (L4 M6 review) — a bare `.resolves.toBeDefined()` would
+    // pass even if this silently started PERMITTING garbage.
     const supplier = makeSupplier();
     const challenge = supplier.issueChallenge();
     const proof = attacker.provePossession(challenge);
     await expect(
       supplier.evaluatePresentation(challenge, { proof, credentials: { authorityJwt: jwt } }, { action: ACTION, scope: { amount: 1 } }),
-    ).resolves.toBeDefined();
+    ).resolves.toMatchObject({ stage: "policy", permitted: false });
   });
 
   it("resolves for a proof with a malformed claimed DID", async () => {
@@ -262,7 +270,13 @@ describe("fail-closed: nothing throws for a malformed or hostile message", () =>
     ).resolves.toMatchObject({ permitted: false });
   });
 
-  it("resolves for credentialStatus: null (would otherwise throw reading entry.statusSize)", async () => {
+  it("resolves refused for credentialStatus: null (would otherwise throw reading entry.statusSize)", async () => {
+    // Knowable outcome, strengthened per FIX 2's audit: `credentialStatus:
+    // null` sanitises to "no credentialStatus supplied", so revocation is
+    // honestly reported "not-checked" — and this fixture's policy sets
+    // `revocationHandling: { requireChecked: true }` (the default,
+    // strict value), so this is deterministically refused under
+    // "revocation-not-checked", never merely "resolves to something".
     const fixture = buildFourBeatFixture(NOW);
     const supplier = new Supplier({ policy: fixture.policy, anchors: fixture.anchors, statusListResolver: fixture.resolver, now: NOW });
     const challenge = supplier.issueChallenge();
@@ -273,7 +287,7 @@ describe("fail-closed: nothing throws for a malformed or hostile message", () =>
         { proof, credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: null as unknown as CredentialStatusEntry } },
         { action: ACTION, scope: { amount: 1 } },
       ),
-    ).resolves.toBeDefined();
+    ).resolves.toMatchObject({ stage: "policy", permitted: false, explanation: { refusalKind: "revocation-not-checked" } });
   });
 
   it("resolves when presentation.proof itself is null/undefined/a non-object", async () => {
@@ -317,37 +331,63 @@ describe("fail-closed: nothing throws for a malformed or hostile message", () =>
 
     const challenge2 = supplier.issueChallenge();
     const proof2 = attacker.provePossession(challenge2);
+    // Knowable outcome, strengthened per FIX 2's audit: the attacker
+    // proves possession of its own DID honestly, so this reaches the
+    // policy stage, where `authorityJwt: "irrelevant"` deterministically
+    // fails credential verification regardless of what `request` itself
+    // was — refused, not merely "resolves to something".
     await expect(
       supplier.evaluatePresentation(challenge2, { proof: proof2, credentials: { authorityJwt: "irrelevant" } }, null as unknown as NegotiationRequest),
-    ).resolves.toBeDefined();
+    ).resolves.toMatchObject({ stage: "policy", permitted: false });
   });
 
-  it("resolves for request.scope: null and request itself missing 'action'", async () => {
+  it("refuses (never PERMITS, never throws) for request.scope: null and for a request itself missing 'action' (FIX 2, L4 M6 review)", async () => {
+    // FIX 2: this test used to assert only `.resolves.toBeDefined()`,
+    // with a comment claiming an empty/null scope "legitimately PERMITS"
+    // because "an empty scope has no field to bound-check". That framed
+    // a genuine authorization bypass as correct behaviour: `amount` IS a
+    // bounded field here (the Buyer's real credential grants
+    // `{ amount: GRANTED_MAX_AMOUNT }`, and the policy's own
+    // `action-scope` rule ceilings it too), so a request that omits it
+    // entirely must be REFUSED under FINDING 4 (M5's fix, merged from
+    // `main`) — never permitted. Because the assertion only checked
+    // "resolves at all", it passed identically before AND after that
+    // bypass was fixed, so it never actually constrained anything that
+    // mattered. This test now pins the CORRECT, specific outcome: a
+    // structured refusal naming the omitted bounded field, not merely
+    // "some decision came back".
     const fixture = buildFourBeatFixture(NOW);
     const supplier = new Supplier({ policy: fixture.policy, anchors: fixture.anchors, statusListResolver: fixture.resolver, now: NOW });
     const challenge = supplier.issueChallenge();
     const proof = fixture.buyer.provePossession(challenge);
-    // `scope: null` is sanitised to `{}` — an empty scope has no field to
-    // bound-check, so this legitimately PERMITS (the action itself still
-    // matches a real, granted, unrevoked authority credential); the point
-    // of this assertion is only that it resolves at all, never throws.
-    await expect(
-      supplier.evaluatePresentation(
-        challenge,
-        { proof, credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus } },
-        { action: ACTION, scope: null as unknown as Record<string, unknown> },
-      ),
-    ).resolves.toBeDefined();
+    const decision = await supplier.evaluatePresentation(
+      challenge,
+      { proof, credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus } },
+      { action: ACTION, scope: null as unknown as Record<string, unknown> },
+    );
+    expect(decision.stage).toBe("policy");
+    expect(decision.permitted).toBe(false);
+    if (decision.stage === "policy" && !decision.permitted) {
+      expect(decision.explanation.refusalKind).toBe("over-scope");
+      expect(decision.explanation.field.path).toBe("scope.amount");
+    }
 
+    // `{}` (no `scope` key at all, and no `action`) is likewise refused
+    // — here because the sanitised action ("") can never match the
+    // credential's own granted action, a DIFFERENT, equally knowable
+    // refusal this test now pins by name rather than leaving unstated.
     const challenge2 = supplier.issueChallenge();
     const proof2 = fixture.buyer.provePossession(challenge2);
-    await expect(
-      supplier.evaluatePresentation(
-        challenge2,
-        { proof: proof2, credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus } },
-        {} as unknown as NegotiationRequest,
-      ),
-    ).resolves.toMatchObject({ permitted: false });
+    const decision2 = await supplier.evaluatePresentation(
+      challenge2,
+      { proof: proof2, credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus } },
+      {} as unknown as NegotiationRequest,
+    );
+    expect(decision2.permitted).toBe(false);
+    expect(decision2.stage).toBe("policy");
+    if (decision2.stage === "policy" && !decision2.permitted) {
+      expect(decision2.explanation.refusalKind).toBe("wrong-action");
+    }
   });
 
   it("resolves for a resolver that throws synchronously (not even a rejected promise)", async () => {
@@ -367,7 +407,14 @@ describe("fail-closed: nothing throws for a malformed or hostile message", () =>
     ).resolves.toMatchObject({ permitted: false });
   });
 
-  it("resolves for hostile historyJwts (garbage strings mixed with a valid one)", async () => {
+  it("resolves PERMITTED for hostile historyJwts (garbage strings mixed with a valid one), since this fixture's policy has no history-narrow rule at all", async () => {
+    // Knowable outcome, strengthened per FIX 2's audit: this fixture's
+    // policy (`scenario.ts`) authors exactly one "action-scope" rule and
+    // NO "history-narrow" rule, so `historyJwts` — garbage or not — can
+    // never affect the outcome (`computeHistoryConstraints` has no rule
+    // to evaluate them against). `amount: 1` is comfortably within the
+    // credential's own granted ceiling, so this is deterministically
+    // PERMITTED, not merely "resolves to something".
     const fixture = buildFourBeatFixture(NOW);
     const supplier = new Supplier({ policy: fixture.policy, anchors: fixture.anchors, statusListResolver: fixture.resolver, now: NOW });
     const challenge = supplier.issueChallenge();
@@ -385,7 +432,7 @@ describe("fail-closed: nothing throws for a malformed or hostile message", () =>
         },
         { action: ACTION, scope: { amount: 1 } },
       ),
-    ).resolves.toBeDefined();
+    ).resolves.toMatchObject({ stage: "policy", permitted: true });
   });
 
   it("resolves for a request with non-numeric and oversized scope fields", async () => {
