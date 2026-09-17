@@ -181,6 +181,11 @@ guarantees actually end:
   `Supplier` inside the request handler, so the live site has no cross-request replay protection
   at all. That is fine for a demo where every request is its own story, and it is exactly the
   mistake this limit describes — so it is named here rather than left as an abstraction.
+  To be precise about what that does and does not mean: the *mechanism* is absent, but the gap
+  is latent rather than live. The endpoint accepts only `{amount, attack}` and never round-trips
+  a challenge to the client, so there is no channel through which a captured proof could be
+  submitted a second time. It would matter the moment this pattern were reused for a real
+  multi-request negotiation API, which is exactly why it is written down.
 - **Failed proof-of-possession attempts are unthrottled, by design.** A challenge nonce is only
   consumed on a *successful* answer, so an attacker gets unlimited free retries against a live
   challenge before it expires. Rate-limiting is treated as a deployment concern (a proxy, a WAF),
