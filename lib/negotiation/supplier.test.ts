@@ -14,8 +14,9 @@
  *     hostile presentations and requests.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createChallenge } from "../identity/index.js";
-import type { CredentialStatusEntry, StatusListResolver } from "../trust/index.js";
+import { createChallenge, encodeDidKey, generateKeyPair, provePossession, type Did } from "../identity/index.js";
+import { issueAuthorityCredential } from "../credentials/index.js";
+import { evaluateAuthorityCredentialTrust, issueVouch, TrustAnchorSet, type CredentialStatusEntry, type StatusListResolver } from "../trust/index.js";
 import { KeyHolder } from "./agent.js";
 import { buildFourBeatFixture } from "./scenario.js";
 import { Supplier } from "./supplier.js";
@@ -703,5 +704,205 @@ describe("challenge single-use (FIX 3, L4 M6 review)", () => {
     expect(replayB.permitted).toBe(false);
     if (replayA.stage === "proof-of-possession") expect(replayA.rule.ruleId).toBe("gate:challenge-single-use");
     if (replayB.stage === "proof-of-possession") expect(replayB.rule.ruleId).toBe("gate:challenge-single-use");
+  });
+});
+
+// =========================================================================
+// FIX 4 (MEDIUM, L4 M6 review): M4's `vouched` issuer-trust path, wired
+// through this protocol for the first time via `PresentedCredentials.
+// vouches`. `lib/trust/anchors.ts`'s `evaluateIssuerTrust` (frozen,
+// unmodified) already implements and tests the depth-1 vouching model in
+// isolation — these tests prove M6's own composition of it: a presenter
+// can now actually REACH that path through the real protocol, and hostile
+// `vouches` shapes are sanitised at this module's own boundary before
+// ever being forwarded.
+// =========================================================================
+describe("vouching, wired through the protocol for the first time (FIX 4, L4 M6 review)", () => {
+  const VOUCH_ACTION = "vouch-test-action";
+  const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+
+  interface RawIdentity {
+    readonly did: Did;
+    readonly privateKey: Uint8Array;
+  }
+  function makeRawIdentity(): RawIdentity {
+    const { publicKey, privateKey } = generateKeyPair();
+    return { did: encodeDidKey(publicKey), privateKey };
+  }
+
+  function vouchPolicy(): unknown {
+    return {
+      id: "vouch-test-policy",
+      version: "1.0.0",
+      revocationHandling: { requireChecked: false, acknowledgedBy: "test-fixture", reason: "no status list wired up for this fixture" },
+      rules: [{ kind: "action-scope", id: "R-vouch", description: "x", action: VOUCH_ACTION, maxScope: { amount: 500 } }],
+    };
+  }
+
+  function issueTestAuthority(issuer: RawIdentity, subject: RawIdentity): string {
+    return issueAuthorityCredential({
+      issuerPrivateKey: issuer.privateKey,
+      issuerDid: issuer.did,
+      subjectDid: subject.did,
+      action: VOUCH_ACTION,
+      scope: { amount: 100 },
+      validFrom: new Date(NOW).toISOString(),
+      validUntil: new Date(NOW + ONE_YEAR_MS).toISOString(),
+      now: NOW,
+    });
+  }
+
+  it("an issuer vouched for by a direct anchor is accepted, and the underlying M4 trust decision names the REAL voucher (the cryptographic signer, never a claimed field)", async () => {
+    const anchor = makeRawIdentity();
+    const issuerB = makeRawIdentity();
+    const presenter = makeRawIdentity();
+    const anchors = new TrustAnchorSet([anchor.did]);
+
+    const vouchJwt = issueVouch({ voucherPrivateKey: anchor.privateKey, voucherDid: anchor.did, vouchedIssuerDid: issuerB.did, now: NOW });
+    const authorityJwt = issueTestAuthority(issuerB, presenter);
+
+    const supplier = new Supplier({ policy: vouchPolicy(), anchors, now: NOW });
+    const challenge = supplier.issueChallenge();
+    const proof = provePossession(presenter.privateKey, presenter.did, challenge);
+
+    const decision = await supplier.evaluatePresentation(
+      challenge,
+      { proof, credentials: { authorityJwt, vouches: [vouchJwt] } },
+      { action: VOUCH_ACTION, scope: { amount: 50 } },
+    );
+
+    expect(decision.stage).toBe("policy");
+    expect(decision.permitted).toBe(true);
+
+    // The underlying M4 trust decision — exactly what `Supplier` itself
+    // calls internally — names the REAL voucher: cryptographically the
+    // vouch JWS's own signer (recovered from its `kid`), never something
+    // an attacker could merely claim in a payload field.
+    const authority = await evaluateAuthorityCredentialTrust({ jwt: authorityJwt, presenterProof: proof, anchors, vouches: [vouchJwt], now: NOW });
+    expect(authority.accepted).toBe(true);
+    if (authority.accepted) {
+      expect(authority.issuerTrust.reason.kind).toBe("vouched");
+      if (authority.issuerTrust.reason.kind === "vouched") {
+        expect(authority.issuerTrust.reason.voucher).toBe(anchor.did);
+      }
+    }
+  });
+
+  it("a vouch signed by a non-anchor attacker naming itself is refused — the voucher must itself be a direct anchor", async () => {
+    const anchor = makeRawIdentity();
+    const attacker = makeRawIdentity();
+    const presenter = makeRawIdentity();
+    const anchors = new TrustAnchorSet([anchor.did]);
+
+    // The attacker signs a vouch FOR ITSELF (not a direct anchor), then
+    // issues the actual authority credential to a separate presenter —
+    // `issuer !== subject`, so this exercises the VOUCH check, not the
+    // unconditional self-issuance refusal Beat 4 already covers.
+    const selfVouch = issueVouch({ voucherPrivateKey: attacker.privateKey, voucherDid: attacker.did, vouchedIssuerDid: attacker.did, now: NOW });
+    const authorityJwt = issueTestAuthority(attacker, presenter);
+
+    const supplier = new Supplier({ policy: vouchPolicy(), anchors, now: NOW });
+    const challenge = supplier.issueChallenge();
+    const proof = provePossession(presenter.privateKey, presenter.did, challenge);
+
+    const decision = await supplier.evaluatePresentation(
+      challenge,
+      { proof, credentials: { authorityJwt, vouches: [selfVouch] } },
+      { action: VOUCH_ACTION, scope: { amount: 50 } },
+    );
+
+    expect(decision.stage).toBe("policy");
+    expect(decision.permitted).toBe(false);
+    if (decision.stage === "policy" && !decision.permitted) {
+      expect(decision.explanation.refusalKind).toBe("untrusted-issuer");
+      expect(decision.explanation.field.actual).toBe("untrusted-issuer");
+    }
+  });
+
+  it("a vouch naming a DIFFERENT issuer than the one who actually signed the presented credential is refused — a vouch cannot be replayed onto an unrelated issuer", async () => {
+    const anchor = makeRawIdentity();
+    const issuerB = makeRawIdentity(); // vouched for by the anchor
+    const issuerC = makeRawIdentity(); // NOT vouched for; actually signs the credential
+    const presenter = makeRawIdentity();
+    const anchors = new TrustAnchorSet([anchor.did]);
+
+    const vouchForB = issueVouch({ voucherPrivateKey: anchor.privateKey, voucherDid: anchor.did, vouchedIssuerDid: issuerB.did, now: NOW });
+    const authorityJwt = issueTestAuthority(issuerC, presenter);
+
+    const supplier = new Supplier({ policy: vouchPolicy(), anchors, now: NOW });
+    const challenge = supplier.issueChallenge();
+    const proof = provePossession(presenter.privateKey, presenter.did, challenge);
+
+    const decision = await supplier.evaluatePresentation(
+      challenge,
+      { proof, credentials: { authorityJwt, vouches: [vouchForB] } },
+      { action: VOUCH_ACTION, scope: { amount: 50 } },
+    );
+
+    expect(decision.stage).toBe("policy");
+    expect(decision.permitted).toBe(false);
+    if (decision.stage === "policy" && !decision.permitted) {
+      expect(decision.explanation.refusalKind).toBe("untrusted-issuer");
+    }
+  });
+
+  it("a depth-2 vouch chain (anchor vouches B, B vouches C) is refused at the depth-1 limit", async () => {
+    const anchor = makeRawIdentity();
+    const issuerB = makeRawIdentity();
+    const issuerC = makeRawIdentity();
+    const presenter = makeRawIdentity();
+    const anchors = new TrustAnchorSet([anchor.did]);
+
+    const anchorVouchesB = issueVouch({ voucherPrivateKey: anchor.privateKey, voucherDid: anchor.did, vouchedIssuerDid: issuerB.did, now: NOW });
+    const bVouchesC = issueVouch({ voucherPrivateKey: issuerB.privateKey, voucherDid: issuerB.did, vouchedIssuerDid: issuerC.did, now: NOW });
+    const authorityJwt = issueTestAuthority(issuerC, presenter);
+
+    const supplier = new Supplier({ policy: vouchPolicy(), anchors, now: NOW });
+    const challenge = supplier.issueChallenge();
+    const proof = provePossession(presenter.privateKey, presenter.did, challenge);
+
+    const decision = await supplier.evaluatePresentation(
+      challenge,
+      { proof, credentials: { authorityJwt, vouches: [anchorVouchesB, bVouchesC] } },
+      { action: VOUCH_ACTION, scope: { amount: 50 } },
+    );
+
+    expect(decision.stage).toBe("policy");
+    expect(decision.permitted).toBe(false);
+    if (decision.stage === "policy" && !decision.permitted) {
+      expect(decision.explanation.refusalKind).toBe("untrusted-issuer");
+    }
+  });
+
+  it("hostile `vouches` shapes (non-array, null/garbage entries, 1000 entries) resolve, never throw", async () => {
+    const anchor = makeRawIdentity();
+    const presenter = makeRawIdentity();
+    const anchors = new TrustAnchorSet([anchor.did]);
+    // Self-issued, so refused regardless of `vouches` content — isolates
+    // the property under test (never throws) from the vouch mechanism
+    // itself (already covered by the other tests in this block).
+    const authorityJwt = issueTestAuthority(presenter, presenter);
+
+    const hostileVouchesShapes: readonly unknown[] = [
+      "not-an-array",
+      null,
+      undefined,
+      42,
+      [null, 123, {}, "garbage-jwt", "a.b.c"],
+      Array.from({ length: 1000 }, (_, i) => `garbage-vouch-${i}`),
+    ];
+
+    for (const hostileVouches of hostileVouchesShapes) {
+      const supplier = new Supplier({ policy: vouchPolicy(), anchors, now: NOW });
+      const challenge = supplier.issueChallenge();
+      const proof = provePossession(presenter.privateKey, presenter.did, challenge);
+      await expect(
+        supplier.evaluatePresentation(
+          challenge,
+          { proof, credentials: { authorityJwt, vouches: hostileVouches as unknown as readonly string[] } },
+          { action: VOUCH_ACTION, scope: { amount: 50 } },
+        ),
+      ).resolves.toMatchObject({ stage: "policy", permitted: false });
+    }
   });
 });

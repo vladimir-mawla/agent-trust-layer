@@ -67,6 +67,22 @@ import {
 } from "./explanation.js";
 import type { NegotiationRequest, Presentation } from "./messages.js";
 
+/** Cap on how many `vouches` candidates one presentation may offer
+ *  before being forwarded to `lib/trust`'s `evaluateIssuerTrust`. See
+ *  this module's own comment on `sanitizeVouches` (FIX 4, L4 M6 review)
+ *  for why this exists: `evaluateIssuerTrust` independently
+ *  cryptographically verifies EVERY candidate (one `verifyVouch` call —
+ *  a real Ed25519 verification — per entry), and that loop lives in
+ *  `lib/trust/anchors.ts`, which is FROZEN for this milestone and takes
+ *  no cap of its own. A legitimate presenter needs at most one real
+ *  vouch to satisfy the depth-1 model (`VOUCH_DEPTH_LIMIT`); this cap is
+ *  deliberately generous well beyond that (room for a presenter that
+ *  genuinely holds vouches from several candidate anchors) while still
+ *  bounding the worst-case synchronous verification cost of a single
+ *  `evaluatePresentation` call to a small constant regardless of how
+ *  many entries a hostile counterparty stuffs into the message. */
+const MAX_VOUCHES_PER_PRESENTATION = 16;
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -165,6 +181,25 @@ function sanitizeRequest(request: NegotiationRequest): NegotiationRequest {
     action: typeof request?.action === "string" ? request.action : "",
     scope: sanitizeScope(request?.scope),
   };
+}
+
+/**
+ * Coerce a hostile/malformed `PresentedCredentials.vouches` into an
+ * array `lib/trust`'s `evaluateIssuerTrust` can safely consume (FIX 4,
+ * L4 M6 review): a non-array is read as "no vouches offered" (never a
+ * thrown error from iterating a non-iterable), a non-string entry
+ * (`null`, a number, an object masquerading as a JWT) is dropped rather
+ * than handed to `verifyVouch`, and the result is capped at
+ * `MAX_VOUCHES_PER_PRESENTATION` — see that constant's own comment for
+ * why the cap exists (each surviving entry costs one real signature
+ * verification in a dependency this milestone does not modify).
+ */
+function sanitizeVouches(rawVouches: unknown): readonly string[] {
+  if (!Array.isArray(rawVouches)) {
+    return [];
+  }
+  const strings = rawVouches.filter((entry): entry is string => typeof entry === "string");
+  return strings.slice(0, MAX_VOUCHES_PER_PRESENTATION);
 }
 
 export interface SupplierOptions {
@@ -350,11 +385,18 @@ export class Supplier {
     const credentialStatus: CredentialStatusEntry | undefined = isPlainObject(rawCredentialStatus) ? (rawCredentialStatus as unknown as CredentialStatusEntry) : undefined;
     const historyJwtsRaw = credentials["historyJwts"];
     const historyJwts: readonly string[] = Array.isArray(historyJwtsRaw) ? historyJwtsRaw.filter((entry): entry is string => typeof entry === "string") : [];
+    // FIX 4 (L4 M6 review): wire M4's `vouched` issuer-trust path through
+    // this protocol — see `messages.ts`'s `PresentedCredentials.vouches`
+    // and `sanitizeVouches` above for why this is capped and filtered
+    // before ever reaching `evaluateAuthorityCredentialTrust`/
+    // `evaluateIssuerTrust` (`lib/trust`, unmodified).
+    const vouches = sanitizeVouches(credentials["vouches"]);
 
     const authority = await evaluateAuthorityCredentialTrust({
       jwt: authorityJwt,
       presenterProof: proof,
       anchors: this.#options.anchors,
+      vouches,
       ...(credentialStatus !== undefined && this.#options.statusListResolver !== undefined
         ? { credentialStatus, statusListResolver: this.#options.statusListResolver }
         : {}),

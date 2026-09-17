@@ -51,6 +51,19 @@ export interface PresentedCredentials {
   /** Compact VC-JWT `HistoryAttestation`s accompanying the request, if
    *  any. Never itself capable of granting authority — ADR 0002. */
   readonly historyJwts?: readonly string[];
+  /** Candidate `Vouch` JWTs (`lib/trust/vouch.ts`) the presenter offers
+   *  as evidence that `authorityJwt`'s own issuer — even if it is not
+   *  one of the Supplier's configured trust anchors directly — is
+   *  vouched for by one, per M4's exactly-one-level-of-delegation model
+   *  (`lib/trust/anchors.ts`'s `evaluateIssuerTrust`,
+   *  `VOUCH_DEPTH_LIMIT`). Omitted entirely (or empty) means "no vouches
+   *  offered" — an issuer that is not itself a direct anchor is then
+   *  refused as `untrusted-issuer`, exactly as before this field
+   *  existed. Before this field, M4's `vouched` trust path existed in
+   *  `lib/trust` but was structurally unreachable through this
+   *  protocol — see `supplier.ts`'s own comment on why this array is
+   *  capped before being forwarded. */
+  readonly vouches?: readonly string[];
 }
 
 /**
