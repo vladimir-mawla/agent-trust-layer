@@ -105,7 +105,7 @@ Publish claims and revocations to a blockchain so any party can read the shared,
   four-beat narrative: accept within scope, refuse over scope, refuse a spoofed DID, refuse a
   forged credential.
 - **Phase:** INTEGRATE
-- **Files:** `lib/agents/**`, `scripts/demo-negotiation.ts`
+- **Files:** `lib/negotiation/**`, `scripts/demo-negotiation.ts`
 - **Demo command:** `npm run demo:negotiation`
 - **Success criteria:** the scripted run prints all four outcomes with their reasons, in order.
 - **Loops:** L1, L4

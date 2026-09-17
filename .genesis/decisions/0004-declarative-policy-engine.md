@@ -161,6 +161,43 @@ being consulted. See the L4 M5 review amendment below (FINDING 4).
   policy's full shape on every call from `evaluatePolicyRequest`, trading a small amount of
   per-request CPU for the guarantee that a hand-mutated or JSON-sourced `Policy` object can never
   bypass validation by virtue of already having the right TypeScript type.
+- **Negative / cost, named plainly (added after the L4 M6 review — decision 6's own
+  "union of every bounded field" fix has a real, user-visible cost, not just a theoretical one):**
+  evaluating the UNION of every field named by the credential's own scope, the matching
+  `ActionScopeRule.maxScope`, and any triggered `HistoryNarrowRule.scopeField` — rather than only the
+  fields the `PolicyRequest` happens to mention — closes the omitted-bounded-field bypass, but it can
+  also refuse requests a policy author did not intend to refuse, in at least two concrete ways this
+  ADR did not call out at the time:
+    1. **A credential granting several numeric scope dimensions, when the policy only cares about
+       one of them, now refuses a request that omits the dimension the POLICY never bounds.**
+       Example: an authority credential's own `scope` is `{ maxAmount: 500, maxItems: 10 }`, but the
+       matching `ActionScopeRule.maxScope` is only `{ maxAmount: 500 }` — the policy author never
+       wrote anything about `maxItems` because, from the policy's point of view, it doesn't matter.
+       `maxItems` is still a bounded field (the credential itself names a numeric bound for it), so a
+       request that only supplies `{ maxAmount: 200 }` and never mentions `maxItems` at all is
+       refused — not because the POLICY cares, but because the CREDENTIAL happens to grant a second
+       numeric dimension the request didn't ask to use. A requester who has never seen the
+       credential's own scope (only what the policy publishes it will check) has no way to predict
+       this refusal in advance.
+    2. **A `HistoryNarrowRule.scopeField` naming a field present in neither the credential's own
+       scope nor the matching rule's `maxScope` forces every request for that action to declare a
+       field it had no other reason to know existed.** A `HistoryNarrowRule` can name ANY
+       `scopeField` string — nothing requires it to already appear in the credential or in
+       `maxScope` — precisely so a policy author can introduce a brand-new dimension purely for
+       history-based narrowing. But the moment such a rule exists (regardless of whether it has ever
+       actually TRIGGERED for a given request — `boundedFields` is derived from `triggered`, the set
+       of constraints that fired, not from every `HistoryNarrowRule` a policy merely contains, so in
+       practice this bites only once a matching history attestation has actually narrowed that
+       field), a request must supply a numeric value for that field or be refused as unbounded — even
+       though nothing in the credential or the policy's own `maxScope` ever told the requester that
+       field mattered at all.
+  Both failure modes fail SAFE — they refuse rather than over-grant, which is the whole point of
+  decision 6 — but a policy author can trip over either unknowingly: a credential issuer adding an
+  extra scope dimension for their own bookkeeping, or a policy author adding a `HistoryNarrowRule` for
+  a field nobody previously had to name, can each silently turn previously-permitted requests into
+  refusals for a class of requester who had no way to see it coming. This is a real, deliberate
+  trade-off (fail-closed over fail-open), not a defect — but it is a genuine cost of decision 6, and
+  is recorded here rather than left implicit.
 - **Invariant added to context-graph.json:** none new required — this ADR is the concrete
   implementation of `no-unverified-claim-reaches-policy` (the engine's own input types admit only
   `TrustDecision`/`HistoryTrustDecision`, never a raw claim) and `every-decision-is-explainable`

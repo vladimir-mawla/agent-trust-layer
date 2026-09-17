@@ -89,6 +89,7 @@ import { computeAuthorityEnvelope, type AuthorityEnvelope } from "./envelope.js"
 import { computeHistoryConstraints } from "./history-constraints.js";
 import { computeFieldBound, type FieldBound } from "./permitted-scope.js";
 import { checkAuthorityInput, sanitizeHistoryInput } from "./decision-guards.js";
+import { readScopeField } from "./safe-scope-read.js";
 import {
   GATE_ACTION_MATCH,
   GATE_AUTHORITY_REQUIRED,
@@ -304,7 +305,18 @@ export function evaluatePolicyRequest(input: EvaluatePolicyRequestInput): Policy
       continue;
     }
 
-    const requestedRaw = request.scope[field];
+    // FIX (L4 M6 review, critical): `request.scope` is untrusted data
+    // that never passes through `validatePolicy` (only `policy` does) —
+    // unlike `envelope.scope`/`matchingRule.maxScope`, which are both
+    // rebuilt from JSON-parsed/validated data and therefore cannot carry
+    // a getter, a Proxy, or a throwing accessor. A hostile `scope` CAN.
+    // `readScopeField` reads defensively so a throwing own/inherited
+    // getter, or a Proxy trap that throws, resolves to `threw: true`
+    // rather than propagating out of this function (and, through
+    // `Supplier.evaluatePresentation`, out as an unhandled rejection —
+    // the same defect class that got M3 rejected once already).
+    const scopeRead = readScopeField(request.scope, field);
+    const requestedRaw = scopeRead.value;
     if (typeof requestedRaw !== "number") {
       // FINDING 4: a field this engine knows a bound for, but the
       // request never supplied a numeric value for (omitted entirely, or
@@ -318,7 +330,11 @@ export function evaluatePolicyRequest(input: EvaluatePolicyRequestInput): Policy
         bound.rule,
         fieldEvidence(`scope.${field}`, {
           permitted: bound.value,
-          note: Object.prototype.hasOwnProperty.call(request.scope, field) ? "present in the request but not a number" : "omitted from the request entirely",
+          note: scopeRead.threw
+            ? "reading this field off the request threw (a hostile getter/Proxy trap) — treated as unreadable, exactly like an omitted field, never as an exception"
+            : scopeRead.present
+              ? "present in the request but not a number"
+              : "omitted from the request entirely",
         }),
         `"${field}" is bounded to a maximum of ${bound.value} (source: ${describeBoundSource(bound)}), but the request did not supply a numeric value for it; an omitted-but-bounded field is refused, never treated as an implicit zero or as escaping the bound (FINDING 4)`,
       );

@@ -3,7 +3,7 @@ import { createChallenge, encodeDidKey, generateKeyPair, provePossession, type D
 import { issueAuthorityCredential, issueHistoryAttestation } from "../credentials/index.js";
 import { TrustAnchorSet } from "../trust/anchors.js";
 import { issueStatusListCredential } from "../trust/status-list.js";
-import { evaluateAuthorityCredentialTrust, evaluateHistoryAttestationTrust, type TrustDecision } from "../trust/index.js";
+import { evaluateAuthorityCredentialTrust, evaluateHistoryAttestationTrust, type HistoryTrustDecision, type TrustDecision } from "../trust/index.js";
 import type { AuthorityCredential } from "../credentials/index.js";
 import { evaluatePolicyRequest, type EvaluatePolicyRequestInput, type PolicyDecision } from "./engine.js";
 import { ACTION_SCOPE_RULE_KIND, HISTORY_NARROW_RULE_KIND, type Policy } from "./policy-types.js";
@@ -740,5 +740,238 @@ describe("evaluatePolicyRequest — a non-finite bound refuses rather than permi
     if (decision.permitted) throw new Error("expected refusal — a non-finite requested value must never read as within scope");
     expect(decision.explanation.refusalKind).toBe("over-scope");
     expectNonEmptyExplanation(decision);
+  });
+});
+
+// =========================================================================
+// FIX 1 (L4 M6 review, CRITICAL): a throwing accessor anywhere in
+// `request.scope` must resolve to a structured refusal, never propagate
+// as an exception. `request` (unlike `policy`) is never re-validated by
+// this module — it is exactly the kind of value that can arrive from a
+// real, untrusted counterparty (see `lib/negotiation/supplier.ts`), and
+// `Object.entries`/bracket property access on a hostile `scope` used to
+// invoke whatever accessor sits behind the field name this engine reads.
+// Every case below reaches `evaluatePolicyRequest` DIRECTLY — proving the
+// ROOT-LAYER fix in `engine.ts`/`safe-scope-read.ts` holds even for a
+// caller that bypasses `Supplier`'s own boundary sanitisation entirely.
+// =========================================================================
+describe("evaluatePolicyRequest — a throwing scope accessor is refused, never thrown (FIX 1)", () => {
+  const boundedAuthority = fabricatedAcceptedAuthority({ amount: 500 });
+  const boundedPolicy: Policy = {
+    id: "policy-hostile-scope-fixture",
+    version: "1.0.0",
+    revocationHandling: { requireChecked: false, acknowledgedBy: "test-fixture", reason: "irrelevant to this test" },
+    rules: [{ kind: ACTION_SCOPE_RULE_KIND, id: "R-purchase", description: "purchase ceiling", action: "purchase", maxScope: { amount: 500 } }],
+  };
+
+  function expectRefusedNotThrown(request: EvaluatePolicyRequestInput["request"]): Extract<PolicyDecision, { readonly permitted: false }> {
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = evaluatePolicyRequest({ policy: boundedPolicy, request, authority: boundedAuthority, history: [] });
+    }).not.toThrow();
+    if (decision === undefined) throw new Error("unreachable — evaluatePolicyRequest must always return synchronously");
+    expect(decision.permitted).toBe(false);
+    if (decision.permitted) throw new Error("expected refusal");
+    expectNonEmptyExplanation(decision);
+    return decision;
+  }
+
+  it("an own throwing getter for the bounded field resolves to a structured refusal (the L4 M6 repro, at the engine layer)", () => {
+    const scope: Record<string, unknown> = {};
+    Object.defineProperty(scope, "amount", { enumerable: true, get() { throw new Error("boom-getter"); } });
+
+    const decision = expectRefusedNotThrown({ action: "purchase", scope });
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+  });
+
+  it("a getter inherited from the scope object's OWN PROTOTYPE (not an own property) also refuses, never throws", () => {
+    const proto = {};
+    Object.defineProperty(proto, "amount", { enumerable: true, get() { throw new Error("boom-prototype-getter"); } });
+    const scope: Record<string, unknown> = Object.create(proto);
+
+    const decision = expectRefusedNotThrown({ action: "purchase", scope });
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+  });
+
+  it("a Proxy whose get/ownKeys/getOwnPropertyDescriptor traps all throw refuses, never throws", () => {
+    const scope = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("boom-proxy-get");
+        },
+        ownKeys() {
+          throw new Error("boom-proxy-ownKeys");
+        },
+        getOwnPropertyDescriptor() {
+          throw new Error("boom-proxy-getOwnPropertyDescriptor");
+        },
+      },
+    );
+
+    const decision = expectRefusedNotThrown({ action: "purchase", scope: scope as unknown as Record<string, unknown> });
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+  });
+
+  it("a value whose own toString/valueOf throw is never coerced — read safely, then refused for not being a number", () => {
+    const hostileValue = {
+      valueOf(): number {
+        throw new Error("boom-valueof");
+      },
+      toString(): string {
+        throw new Error("boom-tostring");
+      },
+    };
+
+    const decision = expectRefusedNotThrown({ action: "purchase", scope: { amount: hostileValue } });
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+  });
+
+  it("a value that is ITSELF an object with a throwing getter is never dereferenced — read once, then refused for not being a number", () => {
+    const nested: Record<string, unknown> = {};
+    Object.defineProperty(nested, "innerField", { enumerable: true, get() { throw new Error("boom-nested-getter"); } });
+
+    const decision = expectRefusedNotThrown({ action: "purchase", scope: { amount: nested } });
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+  });
+
+  it("a Symbol-keyed property alongside a throwing getter for the bounded field is inert and never visited", () => {
+    const scope: Record<string, unknown> = {};
+    const sym = Symbol("hostile-symbol-key");
+    Object.defineProperty(scope, sym, {
+      enumerable: true,
+      get() {
+        throw new Error("boom-symbol-getter");
+      },
+    });
+    Object.defineProperty(scope, "amount", { enumerable: true, get() { throw new Error("boom-getter-alongside-symbol"); } });
+
+    const decision = expectRefusedNotThrown({ action: "purchase", scope });
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+  });
+
+  it("TEETH: reverting the readScopeField guard makes the repro reject/throw again (see report for the two pasted runs)", () => {
+    // This test exists purely as a permanent, in-repo trip-wire — it
+    // documents the mechanism the manual revert-and-restore proof (see
+    // the task report) exercised by hand. It does not itself revert
+    // anything; it re-asserts the guarantee the guard provides.
+    const scope: Record<string, unknown> = {};
+    Object.defineProperty(scope, "amount", { enumerable: true, get() { throw new Error("boom-getter"); } });
+    expect(() => evaluatePolicyRequest({ policy: boundedPolicy, request: { action: "purchase", scope }, authority: boundedAuthority, history: [] })).not.toThrow();
+  });
+});
+
+// =========================================================================
+// FIX 5(a) (L4 M5 re-verification, non-blocking follow-up): the SAME
+// defect class as FIX 1, one layer down in `decision-guards.ts`. Unlike
+// `request.scope`, `authority`/`history` normally arrive as JSON (where a
+// throwing accessor cannot occur) — but nothing stops an adversarial
+// IN-PROCESS caller from handing `evaluatePolicyRequest` a hand-built
+// object with a throwing getter instead. `checkAuthorityInput`/
+// `sanitizeHistoryInput` must fail closed (treat it as absent/malformed)
+// rather than let the exception escape.
+// =========================================================================
+describe("evaluatePolicyRequest — a throwing property on authority/history is malformed, not a crash (FIX 5(a))", () => {
+  const policy: Policy = {
+    id: "policy-hostile-authority-fixture",
+    version: "1.0.0",
+    revocationHandling: { requireChecked: true },
+    rules: [{ kind: ACTION_SCOPE_RULE_KIND, id: "R-purchase", description: "x", action: "purchase", maxScope: {} }],
+  };
+
+  it("a top-level `authority` whose own property read throws is treated as malformed (refused under GATE_AUTHORITY_REQUIRED), never thrown", () => {
+    const hostileAuthority = new Proxy(
+      { accepted: true },
+      {
+        get(target, prop) {
+          if (prop === "accepted") return Reflect.get(target, prop);
+          throw new Error("boom-authority-getter");
+        },
+      },
+    );
+
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = evaluatePolicyRequest({
+        policy,
+        request: { action: "purchase", scope: {} },
+        authority: hostileAuthority as unknown as TrustDecision<AuthorityCredential>,
+        history: [],
+      });
+    }).not.toThrow();
+    if (decision === undefined) throw new Error("unreachable");
+    expect(decision.permitted).toBe(false);
+    if (decision.permitted) throw new Error("expected refusal");
+    expect(decision.explanation.refusalKind).toBe("no-authority-credential");
+    expectNonEmptyExplanation(decision);
+  });
+
+  it("an `authority` object whose OWN prototype has a throwing getter is treated as malformed, never thrown", () => {
+    const proto: Record<string, unknown> = {};
+    Object.defineProperty(proto, "reason", { enumerable: true, get() { throw new Error("boom-authority-prototype-getter"); } });
+    const hostileAuthority = Object.assign(Object.create(proto), { accepted: false, stage: "revocation" });
+
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = evaluatePolicyRequest({
+        policy,
+        request: { action: "purchase", scope: {} },
+        authority: hostileAuthority as unknown as TrustDecision<AuthorityCredential>,
+        history: [],
+      });
+    }).not.toThrow();
+    if (decision === undefined) throw new Error("unreachable");
+    expect(decision.permitted).toBe(false);
+  });
+
+  it("a `history` entry whose property read throws during the array walk is dropped, never thrown, and does not poison the other entries", () => {
+    const goodEntry = { accepted: false, stage: "revocation", reason: "unrelated, well-formed-enough entry" };
+    const hostileEntry = new Proxy(
+      { accepted: true },
+      {
+        get(target, prop) {
+          if (prop === "accepted") return Reflect.get(target, prop);
+          throw new Error("boom-history-entry-getter");
+        },
+      },
+    );
+
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = evaluatePolicyRequest({
+        policy,
+        request: { action: "purchase", scope: {} },
+        authority: null,
+        history: [goodEntry, hostileEntry] as unknown as readonly HistoryTrustDecision[],
+      });
+    }).not.toThrow();
+    if (decision === undefined) throw new Error("unreachable");
+    // No authority was presented at all — refused under
+    // GATE_AUTHORITY_REQUIRED regardless of `history`'s own contents;
+    // the point of this test is solely that a hostile `history` entry
+    // never throws while being sanitised, which the assertion above
+    // (`.not.toThrow()`) already proves.
+    expect(decision.permitted).toBe(false);
+  });
+
+  it("a `history` array that itself throws on indexing (a Proxy-wrapped array) never throws, is treated as empty/unreadable", () => {
+    const hostileHistoryArray = new Proxy([{ accepted: false, stage: "revocation", reason: "x" }], {
+      get(target, prop, receiver) {
+        if (prop === "length") return Reflect.get(target, prop, receiver);
+        throw new Error("boom-history-array-index");
+      },
+    });
+
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = evaluatePolicyRequest({
+        policy,
+        request: { action: "purchase", scope: {} },
+        authority: null,
+        history: hostileHistoryArray as unknown as readonly HistoryTrustDecision[],
+      });
+    }).not.toThrow();
+    if (decision === undefined) throw new Error("unreachable");
+    expect(decision.permitted).toBe(false);
   });
 });
