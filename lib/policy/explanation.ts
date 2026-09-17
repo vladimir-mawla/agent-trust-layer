@@ -37,7 +37,17 @@ import type { Did } from "../identity/index.js";
 /** Every distinct, named way a request can be refused — see the M5
  *  brief's own "Refusal reasons must be distinguishable" requirement.
  *  Each is produced by exactly one `switch` arm in `engine.ts`; there is
- *  no code path that returns `refused` without picking one of these. */
+ *  no code path that returns `refused` without picking one of these.
+ *
+ *  `"negative-scope-value"` (added for the M7 exploratory attack suite's
+ *  own finding — see `engine.ts`'s comment on the guard that produces
+ *  it) is DELIBERATELY its own kind, never folded into `"over-scope"`:
+ *  "over scope" is a misleading description of a request like
+ *  `amount: -500000` against a ceiling of `500` — the request is not
+ *  ABOVE the ceiling, it is on the wrong side of zero entirely, and a
+ *  consumer narrating this decision (M6's demo, M8's UI, this milestone's
+ *  own attack suite) needs to be able to say so precisely, not merely
+ *  "too much". */
 export type RefusalKind =
   | "no-authority-credential"
   | "credential-verification-failed"
@@ -47,7 +57,8 @@ export type RefusalKind =
   | "wrong-action"
   | "no-matching-rule"
   | "over-scope"
-  | "history-constraint";
+  | "history-constraint"
+  | "negative-scope-value";
 
 /** A reference to whatever fired: either an authored `PolicyRule`'s own
  *  `id`/`description`, or one of this module's structural gates below. */

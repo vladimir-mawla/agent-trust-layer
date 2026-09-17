@@ -108,10 +108,10 @@ choice, not an implementation detail a function caller should be trusted to reme
 
 **4. Every decision is a discriminated `PolicyDecision` whose `explanation` is structured data,
 never a bare boolean.** `Explanation` (`explanation.ts`) names `outcome`, and for a refusal, one of
-nine distinct `RefusalKind`s (`no-authority-credential`, `credential-verification-failed`,
+ten distinct `RefusalKind`s (`no-authority-credential`, `credential-verification-failed`,
 `untrusted-issuer`, `revoked`, `revocation-not-checked`, `wrong-action`, `no-matching-rule`,
-`over-scope`, `history-constraint`) — each produced by exactly one code path in `engine.ts`, never
-inferred after the fact. Every `Explanation` also names `rule` (the authored `PolicyRule` that
+`over-scope`, `history-constraint`, `negative-scope-value` — the last added by the M7 fix amendment
+below) — each produced by exactly one code path in `engine.ts`, never inferred after the fact. Every `Explanation` also names `rule` (the authored `PolicyRule` that
 fired, OR one of this module's own named structural gates, e.g. `GATE_AUTHORITY_REQUIRED` — a
 structural refusal is still a rule firing, and is named as one) and `field` (the exact credential/
 request field, with `requested`/`permitted`/`actual` values attached — an over-scope refusal always
@@ -256,6 +256,49 @@ what changed so the ADR's own claims stay true of the code:
   tighten-never-loosen design. A regression test
   (`history-constraints.test.ts`) makes this explicit rather than merely
   documented.
+
+## Amendment — M7 exploratory attack suite finding (2026-09-17, `m7-attack-suite`)
+
+M7's exploratory attack suite (`tests/attacks/exploratory/04-numeric-scope-edge-cases.test.ts`)
+found, by direct code reading of `engine.ts` and `permitted-scope.ts` and then confirmed
+empirically, that decision 2's arithmetic ("Arithmetic, corrected" above) enforces only an UPPER
+ceiling and never a lower bound: `requestedValue > bound.value` is the only comparison ever made, so
+a request of `amount: -500000` against a credential granting `maxAmount: 500` was **permitted** —
+`-500000 > 500` is `false`, identically to a small, harmless positive request. This is the same
+shape of defect as FINDING 3/FINDING 4 above (a bound exists in the type system and in the
+arithmetic, but does not constrain what a caller can actually request): every bound this engine
+combines (the credential's own scope value, an `ActionScopeRule.maxScope` ceiling, a triggered
+`HistoryNarrowRule.narrowedMax`) is, and always has been, a `maxX`-style ceiling with no
+lower-bound counterpart anywhere in `policy-types.ts`. For a domain like a purchase, transfer, or
+refund, a negative amount is a REVERSAL, not "a smaller version of the same request" — so this gap
+silently let "authority to spend up to 500" also confer "authority to move 500,000 in the other
+direction," a real authorization consequence, not a cosmetic one.
+
+**Fixed** in `engine.ts`, immediately after the existing `Number.isFinite(requestedValue)` guard
+(FINDING 8): a requested numeric scope value must additionally satisfy `>= 0`, checked BEFORE it is
+ever compared against a ceiling. Refused with a NEW, distinct `RefusalKind` —
+`"negative-scope-value"` — never folded into `"over-scope"`, because "over scope" would misdescribe
+`-500000` against a ceiling of `500` as "too much" when the real problem is that the request is on
+the wrong side of zero entirely; the taxonomy exists precisely so a consumer (M6's demo, M8's UI,
+this milestone's own attack suite) can narrate and assert the SPECIFIC cause, per decision 4 above.
+`0` and `-0` are both deliberately left PERMITTED — `0 < 0` and `-0 < 0` are both `false`, a
+zero-usage request is harmless, and refusing it would be over-reach outside this fix's mandate; `0`
+and `-0` are the same real-world magnitude, and a fix that treated them differently would itself be
+exactly the kind of sign-only technicality this fix exists to eliminate.
+
+This is deliberately a NARROW, universal point-fix, not a general one, and is documented as such in
+`engine.ts`'s own comment: every bound this engine understands is shaped as a `maxX` ceiling whose
+semantics are undefined for a negative input, so "no bounded field may be requested with a negative
+value" is the correct rule GIVEN that shape — but it is not the same as a real lower bound. A policy
+language able to express a genuine floor (a `minScope`-style ceiling-from-below) or a true signed
+range (e.g. "a refund between -1000 and 0 is fine, but nothing past that") would be strictly more
+general, and is deliberately NOT built here — mistaking this fix for that more general answer would
+repeat, one level up, the exact mistake this fix is closing.
+
+`tests/attacks/exploratory/04-numeric-scope-edge-cases.test.ts`'s own final test — previously titled
+`[FINDING — flagged, not fixed]` and asserting `decision.permitted === true` for a negative amount —
+is corrected to assert the refusal and its new, specific `refusalKind`, with the original finding's
+history kept in the test's comment rather than deleted, per the M7 brief.
 
 ## Alternatives rejected
 
