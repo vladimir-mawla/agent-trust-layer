@@ -383,12 +383,12 @@ function withResolverTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeou
  * (signature, ISSUER, AND freshness), and consults a Bitstring Status
  * List for a single credential's status. Fails closed for every failure
  * mode: unavailable, unverifiable, wrong issuer, stale, purpose-
- * mismatched, or malformed all become `{ outcome: "indeterminate" }`,
- * and an explicit "1" bit becomes `{ outcome: "revoked" }` — both refuse
- * a credential; only "active" (a verified, fresh, correctly-issued,
- * correctly-purposed list with the bit unset) accepts one. See the
- * module comment for why this is async and nothing else in `lib/trust`
- * (or `lib/` at all) needs to be.
+ * mismatched, malformed, or timed-out all become
+ * `{ outcome: "indeterminate" }`, and an explicit "1" bit becomes
+ * `{ outcome: "revoked" }` — both refuse a credential; only "active"
+ * (a verified, fresh, correctly-issued, correctly-purposed list with the
+ * bit unset) accepts one. See the module comment for why this is the one
+ * function in `lib/` that performs I/O.
  *
  * `expectedIssuer` is REQUIRED, not optional, and deliberately so. Before
  * this parameter existed, this function verified only that the resolved
