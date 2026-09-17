@@ -18,7 +18,7 @@ Four layers. Each answers one question, and each refuses independently of the ot
 │    refuses ▸ a copied DID the presenter cannot sign for                   │
 │    refuses ▸ a tampered challenge, an expired one                         │
 │    refuses ▸ a captured proof replayed later — one level up, by the       │
-│              counterparty's own session tracking already-answered        │
+│              counterparty's own session tracking already-answered         │
 │              nonces, not by this layer alone (see Limits)                 │
 └───────────────────────────────────────────────────────────────────────────┘
                 │  a DID whose private key the presenter demonstrably holds
@@ -27,7 +27,7 @@ Four layers. Each answers one question, and each refuses independently of the ot
 │ 2  CLAIMS            what is being asserted, and by whom?                 │
 │                                                                           │
 │    W3C Verifiable Credentials 2.0, secured as JWTs (VC-JOSE-COSE), signed │
-│    with Ed25519. Two kinds, structurally distinct and not interchangeable: │
+│    with Ed25519. Two kinds, structurally distinct and not interchangeable:│
 │                                                                           │
 │      AUTHORITY      forward-looking   "may you?"   scoped, expiring,      │
 │                                                     revocable, granted    │
@@ -40,23 +40,25 @@ Four layers. Each answers one question, and each refuses independently of the ot
 ┌───────────────────────────────────────────────────────────────────────────┐
 │ 3  VERIFICATION      is any of it true?                                   │
 │                                                                           │
-│    An ordered chain. No claim field is read before the signature verifies. │
-│    Fail closed at every step: unverifiable, expired, revoked or malformed  │
+│    An ordered chain. No claim field is read before the signature verifies.│
+│    Fail closed at every step: unverifiable, expired, revoked or malformed │
 │    is treated exactly as absent.                                          │
 │                                                                           │
 │      signature       ▸ EdDSA only, hardcoded — never read from the header │
-│      structure       ▸ required fields, well-formed                      │
+│      structure       ▸ required fields, well-formed                       │
 │      temporal        ▸ validFrom / validUntil, explicit clock skew        │
 │      subject binding ▸ the credential's subject must be the proven DID    │
 │      issuer identity ▸ the claimed issuer must be the actual signer       │
-│      revocation      ▸ W3C Bitstring Status List                         │
 │      issuer trust    ▸ a configured anchor, or vouched by one (depth 1)   │
+│      revocation      ▸ W3C Bitstring Status List — checked last, because  │
+│                        there is no reason to spend a network call asking  │
+│                        an issuer you have already decided not to trust    │
 │                                                                           │
 │    refuses ▸ forged signature, tampered claim, alg confusion, alg:none    │
 │    refuses ▸ agent B presenting agent A's valid credential                │
 │    refuses ▸ a credential claiming an issuer that did not sign it         │
-│    refuses ▸ self-issued authority — always, even from a configured anchor │
-│    refuses ▸ a status list whose issuer is not the credential's issuer     │
+│    refuses ▸ self-issued authority — always, even from a configured anchor│
+│    refuses ▸ a status list whose issuer is not the credential's issuer    │
 └───────────────────────────────────────────────────────────────────────────┘
                 │  verified claims, with the reason each is trusted
                 ▼
@@ -64,13 +66,13 @@ Four layers. Each answers one question, and each refuses independently of the ot
 │ 4  POLICY            given all that, may this happen?                     │
 │                                                                           │
 │    Declarative rules over verified claims. The permitted envelope comes   │
-│    from authority credentials alone; history rules can only narrow it.     │
+│    from authority credentials alone; history rules can only narrow it.    │
 │    Every bound combines with Math.min and nothing else.                   │
 │                                                                           │
 │    refuses ▸ no authority credential at all                               │
 │    refuses ▸ wrong action  ·  no matching rule  ·  over scope             │
 │    refuses ▸ negative scope value                                         │
-│    refuses ▸ a history constraint that narrows below the request           │
+│    refuses ▸ a history constraint that narrows below the request          │
 │    refuses ▸ revocation not checked, unless a human signed off by name    │
 └───────────────────────────────────────────────────────────────────────────┘
                 │

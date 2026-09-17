@@ -177,6 +177,10 @@ guarantees actually end:
   request and silently defeats single-use entirely — every "new" request starts with no memory
   of any nonce it has already consumed. A real deployment needs that bookkeeping moved to shared
   storage (Redis, a database row) with the same verify-before-consume ordering.
+  **This includes the demo deployed above:** `app/lib/negotiation-service.ts` constructs a fresh
+  `Supplier` inside the request handler, so the live site has no cross-request replay protection
+  at all. That is fine for a demo where every request is its own story, and it is exactly the
+  mistake this limit describes — so it is named here rather than left as an abstraction.
 - **Failed proof-of-possession attempts are unthrottled, by design.** A challenge nonce is only
   consumed on a *successful* answer, so an attacker gets unlimited free retries against a live
   challenge before it expires. Rate-limiting is treated as a deployment concern (a proxy, a WAF),
