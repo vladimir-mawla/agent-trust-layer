@@ -6,14 +6,11 @@
  *
  *   1. **Session binding** — does this presentation's proof answer the
  *      EXACT challenge this session issued? (`GATE_SESSION_CHALLENGE`)
- *   1.5. **Single-use** (FIX 3, L4 M6 review) — has THIS session already
- *      consumed this exact nonce via an earlier `evaluatePresentation`
- *      call? (`GATE_CHALLENGE_ALREADY_CONSUMED`) — see
- *      `#consumedChallengeNonces`'s own comment for why this state lives
- *      here and not in `lib/identity/challenge.ts`. The nonce is marked
- *      consumed immediately after this check, before anything below can
- *      refuse for a different reason, so a rejected attempt can never be
- *      retried against the same challenge.
+ *   1.5. **Single-use, "already spent" check** (FIX 3, L4 M6 review) —
+ *      has THIS session already consumed this exact nonce via an
+ *      earlier `evaluatePresentation` call? (`GATE_CHALLENGE_ALREADY_
+ *      CONSUMED`) — see `#consumedChallengeNonces`'s own comment for why
+ *      this state lives here and not in `lib/identity/challenge.ts`.
  *   2. **Proof of possession** — M1's `verifyPossession`, called
  *      DIRECTLY here, BEFORE either `presentation.credentials` field is
  *      ever read. This is what makes the brief's named "spoofed
@@ -27,6 +24,20 @@
  *      defense in depth — see `verify.ts`'s step 5 — but that is
  *      redundant with, not a substitute for, this earlier, cheaper,
  *      credential-blind gate.)
+ *   2.5. **Single-use, "mark spent" step** (FIX 3, L4 M6 review; REORDERED
+ *      in the SECOND L4 M6 review, FIX B) — only once (2) has actually
+ *      verified does the nonce get marked consumed, immediately
+ *      afterward and still before credential trust or policy run, so a
+ *      rejected attempt still can never be retried against the same
+ *      challenge for a LATER reason (untrusted issuer, over-scope, ...).
+ *      The first fix round consumed the nonce BEFORE step 2, the instant
+ *      a presentation merely CITED it — which let anyone who knew or
+ *      intercepted a challenge nonce (public the moment it's on the
+ *      wire) burn the legitimate holder's one shot with a garbage
+ *      signature, without holding any private key. See the `try`/`catch`
+ *      around `verifyPossession` below for exactly where consumption now
+ *      happens, and why that ordering doesn't weaken the concurrency
+ *      guarantee.
  *   3. **Credential trust** (M4) — `evaluateAuthorityCredentialTrust`/
  *      `evaluateHistoryAttestationTrust`, unmodified.
  *   4. **Policy** (M5) — `evaluatePolicyRequest`, unmodified.
@@ -362,23 +373,30 @@ export class Supplier {
         narrative: `challenge nonce "${issuedChallenge.nonce}" was already answered by an earlier presentation to this session — a challenge may be answered at most once, so this replay is refused even though the nonce genuinely belongs to this session and has not yet expired`,
       };
     }
-    // Consume the nonce NOW — before proof-of-possession, credential
-    // trust, or policy are even evaluated — so that a presentation
-    // answering this genuine, unconsumed, correctly-bound challenge can
-    // never be retried after being refused for some OTHER reason (a bad
-    // signature, an untrusted issuer, over-scope, ...). This is what
-    // makes "consumption happens even when the presentation is later
-    // refused for another reason" true: nothing below this line can
-    // return without this nonce already being marked spent.
-    this.#consumedChallengeNonces.set(issuedChallenge.nonce, issuedChallenge.expiresAt);
-
     // --- Gate: proof of possession — the ONLY thing examined so far is
     //     `proof` itself. `presentation.credentials` has not been read
     //     even once at this point in the function.
+    //
+    // SECOND L4 M6 REVIEW (FIX B): this check runs BEFORE the nonce is
+    // marked consumed (below) — deliberately reordered from the first
+    // fix round, which consumed the nonce the instant a presentation
+    // CITED it, regardless of whether it proved anything. That let
+    // anyone who merely knew or intercepted a challenge nonce (public
+    // information the moment it's on the wire — nonces are not secrets,
+    // only private keys are) burn the real counterparty's one shot with
+    // a garbage signature, never having held any private key: a pure
+    // denial of service against the legitimate holder. Verifying first
+    // and consuming only on success means an invalid signature costs
+    // the attacker nothing AND costs the legitimate holder nothing —
+    // their own, still-unconsumed, genuinely-answerable challenge is
+    // untouched by someone else's failed attempt against the same nonce.
     let presenterPublicKey: Uint8Array;
     try {
       presenterPublicKey = verifyPossession(proof, { now });
     } catch (error) {
+      // Possession was NOT proven — the nonce stays unconsumed, so the
+      // legitimate holder (if this attempt wasn't them) can still answer
+      // this same challenge afterwards.
       return {
         stage: "proof-of-possession",
         permitted: false,
@@ -388,6 +406,27 @@ export class Supplier {
         narrative: `${proof.did} did not prove possession of the private key behind that DID over this session's fresh challenge (${errorMessage(error)}) — a copied DID string proves nothing; only a signature nobody without the true private key could produce does, and this one does not verify against that DID's public key`,
       };
     }
+
+    // Possession genuinely proven, over THIS session's own,
+    // not-yet-consumed challenge — NOW consume the nonce, still before
+    // credential trust or policy are evaluated, so a presentation that
+    // clears THIS gate can never be retried after being refused for some
+    // OTHER reason (untrusted issuer, over-scope, ...) below. This keeps
+    // FIX 3's original guarantee ("a rejected attempt can never be
+    // retried") intact for every refusal reason from here on, while no
+    // longer applying it to a signature that never verified at all.
+    //
+    // Still entirely synchronous relative to every check above (no
+    // `await` has occurred yet in this call) — the concurrency property
+    // ("two calls racing on one challenge via Promise.all: exactly one
+    // permitted") is unaffected by moving this line: a JS async function
+    // runs synchronously up to its first `await`, so of two concurrent
+    // `evaluatePresentation` calls on the same nonce, whichever's
+    // synchronous prefix reaches this line first commits the nonce
+    // before the other call's single-use check (above) can observe
+    // anything else; the loser is refused there, not here.
+    this.#consumedChallengeNonces.set(issuedChallenge.nonce, issuedChallenge.expiresAt);
+
     const provenDid = encodeDidKey(presenterPublicKey);
 
     // --- From here on: M4 (trust) then M5 (policy), unmodified. Only

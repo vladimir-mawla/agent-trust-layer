@@ -987,3 +987,94 @@ describe("prune/expiry boundary — the prune predicate is the exact complement 
   });
 });
 
+// =========================================================================
+// SECOND L4 M6 REVIEW — FIX B: consumption must happen only AFTER
+// `verifyPossession` actually succeeds, not the instant a presentation
+// merely cites a nonce. The previous ordering let anyone who knew or
+// intercepted a challenge nonce burn the legitimate holder's one shot
+// with a garbage signature, without holding any private key.
+// =========================================================================
+describe("consumption happens only after possession is genuinely proven (FIX B, second L4 M6 review)", () => {
+  it("a garbage-signed presentation for a challenge, followed by the legitimate presentation for the SAME challenge: the legitimate one is PERMITTED (no longer burned by the impostor's failed attempt)", async () => {
+    const fixture = buildFourBeatFixture(NOW);
+    const supplier = new Supplier({ policy: fixture.policy, anchors: fixture.anchors, statusListResolver: fixture.resolver, now: NOW });
+    const challenge = supplier.issueChallenge();
+    const request: NegotiationRequest = { action: ACTION, scope: { amount: 1 } };
+    const credentials = { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus };
+
+    // An attacker who merely knows/intercepted the challenge nonce (it
+    // travels on the wire in plain sight — only private keys are
+    // secret) submits a presentation citing it, but with a signature
+    // that does not verify.
+    const garbageProof: Presentation["proof"] = { did: fixture.buyer.did, challenge, signature: "00".repeat(64) };
+    const garbageDecision = await supplier.evaluatePresentation(challenge, { proof: garbageProof, credentials }, request);
+    expect(garbageDecision.stage).toBe("proof-of-possession");
+    expect(garbageDecision.permitted).toBe(false);
+    if (garbageDecision.stage === "proof-of-possession") {
+      expect(garbageDecision.rule.ruleId).toBe("gate:proof-of-possession");
+    }
+
+    // The REAL Buyer now answers the SAME challenge, genuinely — this
+    // must be permitted; the failed impostor attempt above must not
+    // have spent the nonce.
+    const legitProof = fixture.buyer.provePossession(challenge);
+    const legitDecision = await supplier.evaluatePresentation(challenge, { proof: legitProof, credentials }, request);
+    expect(legitDecision.stage).toBe("policy");
+    expect(legitDecision.permitted).toBe(true);
+  });
+
+  it("a genuinely valid presentation, once accepted, is still refused if replayed — single-use still holds for a REAL presentation", async () => {
+    const fixture = buildFourBeatFixture(NOW);
+    const challenge = fixture.supplier.issueChallenge();
+    const proof = fixture.buyer.provePossession(challenge);
+    const presentation: Presentation = { proof, credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus } };
+    const request: NegotiationRequest = { action: ACTION, scope: { amount: 1 } };
+
+    const first = await fixture.supplier.evaluatePresentation(challenge, presentation, request);
+    expect(first.permitted).toBe(true);
+
+    const replay = await fixture.supplier.evaluatePresentation(challenge, presentation, request);
+    expect(replay.permitted).toBe(false);
+    expect(replay.stage).toBe("proof-of-possession");
+    if (replay.stage === "proof-of-possession") {
+      expect(replay.rule.ruleId).toBe("gate:challenge-single-use");
+    }
+  });
+
+  it("two calls racing on ONE challenge via Promise.all: exactly one is permitted — the concurrency property did not regress when consumption moved after verification", async () => {
+    const fixture = buildFourBeatFixture(NOW);
+    const challenge = fixture.supplier.issueChallenge();
+    const proof = fixture.buyer.provePossession(challenge);
+    const presentation: Presentation = { proof, credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus } };
+    const request: NegotiationRequest = { action: ACTION, scope: { amount: 1 } };
+
+    const [a, b] = await Promise.all([
+      fixture.supplier.evaluatePresentation(challenge, presentation, request),
+      fixture.supplier.evaluatePresentation(challenge, presentation, request),
+    ]);
+
+    const permittedCount = [a, b].filter((decision) => decision.permitted).length;
+    expect(permittedCount).toBe(1);
+  });
+
+  it("a presentation refused at POLICY (valid signature, over scope) still consumes the nonce — possession WAS proven, so retrying is refused at the single-use gate, not re-evaluated", async () => {
+    const fixture = buildFourBeatFixture(NOW);
+    const challenge = fixture.supplier.issueChallenge();
+    const proof = fixture.buyer.provePossession(challenge);
+    const credentials = { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus };
+
+    const overScopeRequest: NegotiationRequest = { action: ACTION, scope: { amount: 999_999 } };
+    const first = await fixture.supplier.evaluatePresentation(challenge, { proof, credentials }, overScopeRequest);
+    expect(first.stage).toBe("policy");
+    expect(first.permitted).toBe(false);
+
+    const wouldHavePermittedRequest: NegotiationRequest = { action: ACTION, scope: { amount: 1 } };
+    const retry = await fixture.supplier.evaluatePresentation(challenge, { proof, credentials }, wouldHavePermittedRequest);
+    expect(retry.stage).toBe("proof-of-possession");
+    expect(retry.permitted).toBe(false);
+    if (retry.stage === "proof-of-possession") {
+      expect(retry.rule.ruleId).toBe("gate:challenge-single-use");
+    }
+  });
+});
+
