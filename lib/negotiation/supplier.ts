@@ -69,18 +69,87 @@ function hasProofShape(proof: unknown): proof is { readonly did: unknown; readon
   return isPlainObject(proof) && isPlainObject(proof["challenge"]) && "did" in proof && "signature" in proof;
 }
 
-/** Coerce a hostile/malformed `NegotiationRequest.scope` into a plain
- *  object `lib/policy`'s `Object.entries(request.scope)` can safely
- *  iterate. `evaluatePolicyRequest` itself has no reason to expect
- *  `scope` might be `null`/`undefined`/a non-object at runtime — every
- *  existing M5 caller is trusted, in-repo test code — but a
- *  `NegotiationRequest` is the first place in this project such a value
- *  can arrive from an actual untrusted counterparty, so THIS boundary is
- *  where it must be sanitised, never by weakening `lib/policy` itself. */
+/**
+ * Produce a plain, inert, DEFENSIVELY-READ copy of a hostile/malformed
+ * `NegotiationRequest.scope` — this Supplier's own composition boundary
+ * against a real, untrusted counterparty (FIX 1, L4 M6 review).
+ *
+ * Before this fix, this function only checked that `scope` WAS an
+ * object and then passed the caller's own object through by reference.
+ * That is not enough: a well-shaped object can still carry a throwing
+ * OWN getter (`Object.defineProperty(scope, "amount", { get() { throw }
+ * })`), a getter inherited from its PROTOTYPE (a plain property READ
+ * still invokes an inherited accessor), or be a `Proxy` whose `get`/
+ * `ownKeys`/`getOwnPropertyDescriptor` traps themselves throw — any of
+ * which would surface as an unhandled rejection out of
+ * `evaluatePresentation` the moment something downstream reads that
+ * field. `lib/policy/engine.ts` now guards its OWN reads too (see
+ * `safe-scope-read.ts`) — this is a SEPARATE, redundant guard at THIS
+ * module's own boundary, not a substitute for that one: the verifier's
+ * point stands that it is this Supplier's job to guard its own
+ * composition boundary against hostile input, not to rely on a
+ * dependency to do it.
+ *
+ * Only OWN, enumerable, STRING-keyed properties are ever copied — a
+ * `Symbol` key is never a meaningful scope dimension
+ * (`PolicyRequest.scope: Readonly<Record<string, unknown>>`) and is
+ * simply skipped, never read. Every step that could touch attacker-
+ * controlled behaviour (`Reflect.ownKeys`, `Object.getOwnPropertyDescriptor`,
+ * the property read itself) is individually wrapped so a throw at ANY
+ * one of them drops just that one field (or, for a top-level enumeration
+ * failure, yields an empty scope) rather than propagating.
+ */
+function sanitizeScope(rawScope: unknown): Record<string, unknown> {
+  if (typeof rawScope !== "object" || rawScope === null) {
+    return {};
+  }
+
+  let keys: readonly PropertyKey[];
+  try {
+    keys = Reflect.ownKeys(rawScope);
+  } catch {
+    // A Proxy whose `ownKeys`/`getOwnPropertyDescriptor` trap throws —
+    // treated as "no readable fields at all", never a crash.
+    return {};
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (typeof key === "symbol") {
+      continue;
+    }
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(rawScope, key);
+    } catch {
+      continue;
+    }
+    if (descriptor === undefined || descriptor.enumerable === false) {
+      continue;
+    }
+    let value: unknown;
+    try {
+      // The read that actually invokes an own or inherited getter, or a
+      // Proxy's `get` trap — the one step in this whole function a
+      // hostile `scope` can make throw for a key that otherwise looked
+      // completely ordinary.
+      value = (rawScope as Record<string, unknown>)[key];
+    } catch {
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+/** Coerce a hostile/malformed `NegotiationRequest` into one
+ *  `lib/policy` can safely evaluate — see `sanitizeScope` above for why
+ *  `scope` specifically needs a defensive COPY, not merely a shape
+ *  check. */
 function sanitizeRequest(request: NegotiationRequest): NegotiationRequest {
   return {
     action: typeof request?.action === "string" ? request.action : "",
-    scope: isPlainObject(request?.scope) ? request.scope : {},
+    scope: sanitizeScope(request?.scope),
   };
 }
 

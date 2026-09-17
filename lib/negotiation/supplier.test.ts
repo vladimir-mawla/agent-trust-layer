@@ -425,3 +425,119 @@ describe("createChallenge / issueChallenge freshness", () => {
     expect(challenge.issuedAt).toBe(direct.issuedAt);
   });
 });
+
+// =========================================================================
+// FIX 1 (L4 M6 review, CRITICAL), M6's own boundary — `sanitizeScope`.
+// `lib/policy/engine.ts` now guards its OWN reads too (see
+// `engine.test.ts`'s equivalent describe block), but the verifier's point
+// stands that it is THIS Supplier's job to guard its own composition
+// boundary, not to rely on a dependency. Every case below reaches
+// `Supplier.evaluatePresentation` — the real, untrusted-counterparty-
+// facing entry point — with a hostile `request.scope`.
+// =========================================================================
+describe("hostile request.scope accessors are refused, never thrown, at the Supplier's own boundary (FIX 1)", () => {
+  async function expectRefusedNotThrown(scope: unknown): Promise<void> {
+    const fixture = buildFourBeatFixture(NOW);
+    const challenge = fixture.supplier.issueChallenge();
+    const proof = fixture.buyer.provePossession(challenge);
+    const decision = await fixture.supplier.evaluatePresentation(
+      challenge,
+      { proof, credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus } },
+      { action: ACTION, scope: scope as Record<string, unknown> },
+    );
+    expect(decision.stage).toBe("policy");
+    expect(decision.permitted).toBe(false);
+  }
+
+  it("the exact L4 M6 repro: an own throwing getter for the bounded field resolves to a structured refusal", async () => {
+    const scope: Record<string, unknown> = {};
+    Object.defineProperty(scope, "amount", {
+      enumerable: true,
+      get() {
+        throw new Error("boom-getter");
+      },
+    });
+    await expect(
+      (async () => {
+        const fixture = buildFourBeatFixture(NOW);
+        const challenge = fixture.supplier.issueChallenge();
+        const proof = fixture.buyer.provePossession(challenge);
+        return fixture.supplier.evaluatePresentation(
+          challenge,
+          { proof, credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus } },
+          { action: ACTION, scope } as unknown as NegotiationRequest,
+        );
+      })(),
+    ).resolves.toMatchObject({ stage: "policy", permitted: false });
+  });
+
+  it("a getter inherited from the scope object's prototype (not an own property) refuses, never throws", async () => {
+    const proto = {};
+    Object.defineProperty(proto, "amount", {
+      enumerable: true,
+      get() {
+        throw new Error("boom-prototype-getter");
+      },
+    });
+    await expectRefusedNotThrown(Object.create(proto));
+  });
+
+  it("a Proxy whose get/ownKeys/getOwnPropertyDescriptor traps all throw refuses, never throws", async () => {
+    const scope = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("boom-proxy-get");
+        },
+        ownKeys() {
+          throw new Error("boom-proxy-ownKeys");
+        },
+        getOwnPropertyDescriptor() {
+          throw new Error("boom-proxy-getOwnPropertyDescriptor");
+        },
+      },
+    );
+    await expectRefusedNotThrown(scope);
+  });
+
+  it("a bounded-field value whose own toString/valueOf throw is never coerced — refused for not being a number", async () => {
+    const hostileValue = {
+      valueOf(): number {
+        throw new Error("boom-valueof");
+      },
+      toString(): string {
+        throw new Error("boom-tostring");
+      },
+    };
+    await expectRefusedNotThrown({ amount: hostileValue });
+  });
+
+  it("a bounded-field value that is itself an object with a throwing getter is never dereferenced — refused for not being a number", async () => {
+    const nested: Record<string, unknown> = {};
+    Object.defineProperty(nested, "innerField", {
+      enumerable: true,
+      get() {
+        throw new Error("boom-nested-getter");
+      },
+    });
+    await expectRefusedNotThrown({ amount: nested });
+  });
+
+  it("a Symbol-keyed property alongside a throwing getter for the bounded field is inert and never visited", async () => {
+    const scope: Record<string, unknown> = {};
+    const sym = Symbol("hostile-symbol-key");
+    Object.defineProperty(scope, sym, {
+      enumerable: true,
+      get() {
+        throw new Error("boom-symbol-getter");
+      },
+    });
+    Object.defineProperty(scope, "amount", {
+      enumerable: true,
+      get() {
+        throw new Error("boom-getter-alongside-symbol");
+      },
+    });
+    await expectRefusedNotThrown(scope);
+  });
+});

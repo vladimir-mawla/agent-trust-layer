@@ -742,3 +742,121 @@ describe("evaluatePolicyRequest — a non-finite bound refuses rather than permi
     expectNonEmptyExplanation(decision);
   });
 });
+
+// =========================================================================
+// FIX 1 (L4 M6 review, CRITICAL): a throwing accessor anywhere in
+// `request.scope` must resolve to a structured refusal, never propagate
+// as an exception. `request` (unlike `policy`) is never re-validated by
+// this module — it is exactly the kind of value that can arrive from a
+// real, untrusted counterparty (see `lib/negotiation/supplier.ts`), and
+// `Object.entries`/bracket property access on a hostile `scope` used to
+// invoke whatever accessor sits behind the field name this engine reads.
+// Every case below reaches `evaluatePolicyRequest` DIRECTLY — proving the
+// ROOT-LAYER fix in `engine.ts`/`safe-scope-read.ts` holds even for a
+// caller that bypasses `Supplier`'s own boundary sanitisation entirely.
+// =========================================================================
+describe("evaluatePolicyRequest — a throwing scope accessor is refused, never thrown (FIX 1)", () => {
+  const boundedAuthority = fabricatedAcceptedAuthority({ amount: 500 });
+  const boundedPolicy: Policy = {
+    id: "policy-hostile-scope-fixture",
+    version: "1.0.0",
+    revocationHandling: { requireChecked: false, acknowledgedBy: "test-fixture", reason: "irrelevant to this test" },
+    rules: [{ kind: ACTION_SCOPE_RULE_KIND, id: "R-purchase", description: "purchase ceiling", action: "purchase", maxScope: { amount: 500 } }],
+  };
+
+  function expectRefusedNotThrown(request: EvaluatePolicyRequestInput["request"]): Extract<PolicyDecision, { readonly permitted: false }> {
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = evaluatePolicyRequest({ policy: boundedPolicy, request, authority: boundedAuthority, history: [] });
+    }).not.toThrow();
+    if (decision === undefined) throw new Error("unreachable — evaluatePolicyRequest must always return synchronously");
+    expect(decision.permitted).toBe(false);
+    if (decision.permitted) throw new Error("expected refusal");
+    expectNonEmptyExplanation(decision);
+    return decision;
+  }
+
+  it("an own throwing getter for the bounded field resolves to a structured refusal (the L4 M6 repro, at the engine layer)", () => {
+    const scope: Record<string, unknown> = {};
+    Object.defineProperty(scope, "amount", { enumerable: true, get() { throw new Error("boom-getter"); } });
+
+    const decision = expectRefusedNotThrown({ action: "purchase", scope });
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+  });
+
+  it("a getter inherited from the scope object's OWN PROTOTYPE (not an own property) also refuses, never throws", () => {
+    const proto = {};
+    Object.defineProperty(proto, "amount", { enumerable: true, get() { throw new Error("boom-prototype-getter"); } });
+    const scope: Record<string, unknown> = Object.create(proto);
+
+    const decision = expectRefusedNotThrown({ action: "purchase", scope });
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+  });
+
+  it("a Proxy whose get/ownKeys/getOwnPropertyDescriptor traps all throw refuses, never throws", () => {
+    const scope = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("boom-proxy-get");
+        },
+        ownKeys() {
+          throw new Error("boom-proxy-ownKeys");
+        },
+        getOwnPropertyDescriptor() {
+          throw new Error("boom-proxy-getOwnPropertyDescriptor");
+        },
+      },
+    );
+
+    const decision = expectRefusedNotThrown({ action: "purchase", scope: scope as unknown as Record<string, unknown> });
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+  });
+
+  it("a value whose own toString/valueOf throw is never coerced — read safely, then refused for not being a number", () => {
+    const hostileValue = {
+      valueOf(): number {
+        throw new Error("boom-valueof");
+      },
+      toString(): string {
+        throw new Error("boom-tostring");
+      },
+    };
+
+    const decision = expectRefusedNotThrown({ action: "purchase", scope: { amount: hostileValue } });
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+  });
+
+  it("a value that is ITSELF an object with a throwing getter is never dereferenced — read once, then refused for not being a number", () => {
+    const nested: Record<string, unknown> = {};
+    Object.defineProperty(nested, "innerField", { enumerable: true, get() { throw new Error("boom-nested-getter"); } });
+
+    const decision = expectRefusedNotThrown({ action: "purchase", scope: { amount: nested } });
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+  });
+
+  it("a Symbol-keyed property alongside a throwing getter for the bounded field is inert and never visited", () => {
+    const scope: Record<string, unknown> = {};
+    const sym = Symbol("hostile-symbol-key");
+    Object.defineProperty(scope, sym, {
+      enumerable: true,
+      get() {
+        throw new Error("boom-symbol-getter");
+      },
+    });
+    Object.defineProperty(scope, "amount", { enumerable: true, get() { throw new Error("boom-getter-alongside-symbol"); } });
+
+    const decision = expectRefusedNotThrown({ action: "purchase", scope });
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+  });
+
+  it("TEETH: reverting the readScopeField guard makes the repro reject/throw again (see report for the two pasted runs)", () => {
+    // This test exists purely as a permanent, in-repo trip-wire — it
+    // documents the mechanism the manual revert-and-restore proof (see
+    // the task report) exercised by hand. It does not itself revert
+    // anything; it re-asserts the guarantee the guard provides.
+    const scope: Record<string, unknown> = {};
+    Object.defineProperty(scope, "amount", { enumerable: true, get() { throw new Error("boom-getter"); } });
+    expect(() => evaluatePolicyRequest({ policy: boundedPolicy, request: { action: "purchase", scope }, authority: boundedAuthority, history: [] })).not.toThrow();
+  });
+});
