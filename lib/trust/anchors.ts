@@ -145,9 +145,11 @@ export function evaluateIssuerTrust(issuer: Did, options: EvaluateIssuerTrustOpt
     // anchor counts. A vouch issued by anyone else — including someone
     // who is themselves only vouched-for — is exactly a depth-2 chain,
     // and this `if` is the whole enforcement: there is no recursive
-    // lookup to walk it, by construction (`vouch-depth.test.ts` proves
-    // both that a depth-2 chain is refused and that `VOUCH_DEPTH_LIMIT`
-    // is the literal `1` this check assumes).
+    // lookup to walk it, by construction (`anchors.test.ts`'s "depth-2
+    // vouching (A vouches B, B vouches C) -> REFUSED at the depth limit"
+    // describe block proves both that a depth-2 chain is refused and
+    // that `VOUCH_DEPTH_LIMIT` is the literal `1` this check assumes;
+    // there is no separate `vouch-depth.test.ts` file).
     if (!options.anchors.has(verified.voucher)) {
       continue;
     }
