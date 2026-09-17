@@ -12,7 +12,8 @@
     "build": "next build --webpack",
     "start": "next start",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.lib.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "demo:negotiation": "tsx scripts/demo-negotiation.ts"
   },
   "dependencies": {
     "@noble/curves": "2.4.0",
@@ -27,6 +28,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "jose": "6.2.12",
+    "tsx": "4.23.13",
     "typescript": "7.0.2",
     "vitest": "5.0.1"
   }
