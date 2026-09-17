@@ -2,52 +2,40 @@
 
 [![CI](https://github.com/vladimir-mawla/agent-trust-layer/actions/workflows/ci.yml/badge.svg)](https://github.com/vladimir-mawla/agent-trust-layer/actions/workflows/ci.yml)
 
-A trust layer for AI agents: how one agent decides whether to act on another agent's request.
-
-> Trust is not a number. It is a decision — about a specific counterparty, for a specific
-> action, under a stated policy, from verifiable evidence.
-
-A reputation "score" with no mechanism underneath is worthless here, because nobody can check
-it, argue with it, or ask why it said what it said. This project replaces the score with a
-chain anyone can verify themselves: an identifier that certifies itself, credentials that are
-signed and checked rather than trusted on sight, and a policy that names the exact rule and the
-exact field that decided the outcome — never a bare `true`/`false`.
-
 **Live: https://agent-trust-layer-pi.vercel.app**
-
-The deployment is not a static page. Its health endpoint runs a real Ed25519 round trip on
-every request, inside the deployed process:
 
 ```bash
 curl -sf https://agent-trust-layer-pi.vercel.app/api/health
 ```
 
 ```json
-{"status":"ok","commit":"c303ab4ff4640e05281f9fda7841499bae501ca1","checks":{"identity":{"pass":true,"elapsedMs":90.84}}}
+{"status":"ok","commit":"340bd8b675efcd47b200356ff746f31a8dfb47f6","checks":{"identity":{"pass":true,"elapsedMs":82.80}}}
 ```
 
-The `commit` field is the deployed git SHA, so you can confirm what you are talking to matches
-what is in this repository. `checks.identity` generates a keypair, encodes a `did:key`, decodes
-it back, signs a challenge and verifies it — and the endpoint returns **503, not 200**, if any
-of that fails.
+That's a real response, not a sample — `commit` is the deployed git SHA (so you can confirm what
+you're talking to matches what's in this repository), and `checks.identity` is a full Ed25519
+keygen → `did:key` encode/decode → challenge-response round trip, run fresh **inside the deployed
+process on every request**. The endpoint returns **503, not 200**, if any of that fails.
 
-## The distinction that organizes the design
+## What this is
 
-Every claim an agent presents is one of two kinds, and the two are not interchangeable:
+A trust layer for AI agents: how one agent decides whether to act on another agent's request.
 
-- **Authority credentials** are forward-looking. They answer *may you?* They are scoped,
-  they expire, they can be revoked, and someone specific granted them.
-- **History attestations** are backward-looking. They answer *should I?* They accumulate, and
-  they are observed rather than granted.
+> Trust is not a number. It is a decision — about a specific counterparty, for a specific
+> action, under a stated policy, from verifiable evidence.
 
-History may tighten a decision (an agent with a record of past refunds might face a lower
-limit) but it may never loosen one — an authority credential is still required for the action
-to happen at all. Letting observed history grant authority on its own would quietly rebuild the
-reputation score this design exists to avoid.
+The claim this project makes: a reputation *score* is unappealable — refuse a $40,000 transfer
+because trust is 0.61, and nobody (operator, counterparty, or auditor) can name the evidence or
+say what would change it. This replaces the score with a chain anyone can verify themselves: a
+self-certifying identifier, credentials that are cryptographically checked rather than trusted on
+sight, and a policy that names the exact rule and the exact field that decided the outcome —
+never a bare `true`/`false`. The [two-year thesis](docs/THESIS.md) makes the longer version of
+this argument; the [architecture snapshot](docs/ARCHITECTURE.md) is the technical one.
 
-## Architecture
+## The four layers
 
-Four layers, each depending only on the one below it:
+Identity → claims → verification → policy, each depending only on the one below it. Full diagram,
+with the real test behind every "refuses" line, in **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -56,7 +44,7 @@ Four layers, each depending only on the one below it:
 │                        and the credential field that decided it │
 ├─────────────────────────────────────────────────────────────────┤
 │ 3. VERIFICATION    signature · expiry · revocation ·            │
-│                     subject binding · freshness                 │
+│                     subject binding · issuer trust               │
 │                    -> fail closed: unverifiable == expired ==   │
 │                       revoked == malformed == absent            │
 ├─────────────────────────────────────────────────────────────────┤
@@ -69,47 +57,48 @@ Four layers, each depending only on the one below it:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**1. Identity.** Agents are identified by `did:key`, a DID method whose identifier is derived
-directly from an Ed25519 public key. Decoding the string is the entire resolution process —
-there is no registry to query and no network call to make. Possessing a DID string proves
-nothing, since anyone who has ever seen it can copy and present it; only signing a fresh
-challenge proves the presenter actually holds the private key behind it.
+History may tighten a decision (an agent with a record of past refunds might face a lower limit)
+but may never loosen one — an authority credential is still required for the action to happen at
+all. Letting observed history grant authority on its own would quietly rebuild the reputation
+score this design exists to avoid.
 
-**2. Claims.** Every statement about an agent — its granted authority, its observed history —
-is a signed W3C Verifiable Credential, split along the authority/history line above.
+## What is actually verifiable
 
-**3. Verification.** Signature, expiry, revocation, subject binding, and freshness are checked
-before any claim inside a credential is read. An unverifiable, expired, revoked, or malformed
-credential is treated exactly as an absent one.
+`npm test` runs **388 tests**, all passing, with a drift guard (`app/milestones.test.ts`) that
+fails the build if the deployed page's milestone claims and `.genesis/DONE.html`'s own build
+record ever disagree — a real bug this project shipped once, on a public URL, before that guard
+existed.
 
-**4. Policy.** Rules run over verified claims and return the rule that fired plus the
-credential field it read — never a bare boolean.
+```
+Test Files  49 passed (49)
+     Tests  388 passed (388)
+```
 
-## Status
+`npm test -- attacks` selects **76 tests across 20 files** under `tests/attacks/`: ten named
+attacks from the project's own plan (forged signature, tampered claim, stolen credential,
+replayed presentation, expired credential, revoked credential, self-issued authority, DID
+impersonation, over-scope request, confused deputy), an exploratory suite that tried things
+nobody had specifically planned for, and — the part worth taking seriously — **six regression
+attacks that pin defects which genuinely shipped into a branch during this project and were
+caught by independent verification**, not defects invented for the exercise:
 
-Two of nine milestones are done. This is a public, honest count — milestones 3 through 9 do
-not exist yet, and nothing below claims otherwise.
+| Regression | What actually happened |
+|---|---|
+| `11-non-json-payload-crash` | A validly-signed non-JSON payload crashed the verifier instead of failing closed (M3). |
+| `12-status-list-issuer-swap` | A resolver could serve a self-signed "clean" status list and get a revoked credential accepted, with no compromise of the real issuer's key (M4). |
+| `13-omitted-bounded-scope-field` | Omitting a scope field the credential itself bounded escaped every ceiling — behind 31 passing tests (M5). |
+| `14-throwing-scope-accessor` | A hostile `scope` object (throwing getter, `Proxy`, self-mutating enumeration) crashed the engine instead of refusing (M6). |
+| `15-nonce-comparator-boundary` | Two comparators disagreeing by one millisecond reopened the replay window the nonce cache existed to close (M6). |
+| `16-nonce-consumed-before-verify` | Consuming a challenge nonce before verifying its signature let anyone burn a legitimate agent's one attempt (M6). |
 
-| # | Milestone | Status |
-|---|---|---|
-| M1 | Identity: `did:key` + proof of possession | **Done.** Built and independently verified (see below). |
-| M2 | Deploy a live skeleton to Vercel | **Done.** Live at https://agent-trust-layer-pi.vercel.app, auto-deploying on push. |
-| M3 | Verifiable credentials: issue and verify | Not started. |
-| M4 | Revocation and trust anchors | Not started. |
-| M5 | Policy engine with explanations | Not started. |
-| M6 | Cross-agent negotiation | Not started. |
-| M7 | The attack suite | Not started. |
-| M8 | The demo UI | Not started. |
-| M9 | Deliverables (docs, thesis, clean-clone check) | Not started. |
-
-The full milestone plan, including each milestone's exact demo command and freeze boundary,
-is in [`.genesis/PLAN.md`](.genesis/PLAN.md). The design rationale for choosing self-certifying
-identity over a central trust registry or an on-chain log is in
-[`.genesis/decisions/0001-self-certifying-identity.md`](.genesis/decisions/0001-self-certifying-identity.md).
+An attack someone actually landed is worth more than one invented to be caught. See
+**[`docs/NOTES.md`](docs/NOTES.md)** for how each of these was found — by a *different* agent
+than the one who built the code, per this project's own maker/checker process.
 
 ## Quickstart
 
-Requires Node 24.x (`engines.node` in `package.json`).
+Requires Node 24.x (`engines.node` in `package.json`) and **`npm ci`, never `npm install`** — see
+[Development notes](#development-notes) for why.
 
 ```bash
 git clone https://github.com/vladimir-mawla/agent-trust-layer.git
@@ -125,77 +114,138 @@ With the dev server running, in another terminal:
 curl -s http://localhost:3000/api/health
 ```
 
-Real response shape (the `commit` value is your checked-out SHA, and `elapsedMs` will vary):
+You'll get the same JSON shape shown at the top, with your own checked-out commit SHA.
 
-```json
-{"status":"ok","commit":"286af2f1e724a481548aa80f88dbf81cfb77b8d0","checks":{"identity":{"pass":true,"elapsedMs":24.28}}}
+Try the negotiation demo directly, no browser needed:
+
+```bash
+npm run demo:negotiation
 ```
 
-`/api/health` doesn't just report "up" — it runs a full keygen → `did:key` encode/decode →
-challenge-response proof-of-possession round trip on every request, in the deployed process,
-and returns HTTP 503 (not 200) if that round trip throws. A health check that reports healthy
-while its core cryptographic primitive is broken would hide exactly the failure it exists to
-catch.
-
-## What is verifiable today
-
-`npm test` runs 29 tests across 4 files under `lib/identity/`, all passing:
-
-```
-Test Files  4 passed (4)
-     Tests  29 passed (29)
-```
-
-Specifically, the suite proves:
-
-- **Signing with the wrong key fails verification.** `challenge.test.ts` has a test literally
-  named `HEADLINE: signing a challenge with the WRONG key fails verification` — a correctly
-  formed proof, signed by a key other than the one the claimed DID names, is rejected.
-- **Malformed DIDs are rejected with typed errors, not silent fallbacks.** `decodeDidKey`
-  throws a `MalformedDidError` carrying one of four specific reason codes (`BAD_PREFIX`,
-  `BAD_MULTIBASE`, `BAD_MULTICODEC`, `BAD_KEY_LENGTH`) — never `null`, never a bare `Error`, so
-  callers and tests can `instanceof`-check exactly what went wrong.
-- **The spec test vector is checked against an independently-derived constant.**
-  `did-key.vectors.test.ts` decodes the official `did:key` Ed25519 example from the W3C
-  method spec and compares it against a 32-byte hex constant that was derived by hand with a
-  from-scratch base58btc decoder, not through the `multiformats` library the code under test
-  actually uses. That distinction matters: if the expected value had been produced by decoding
-  the same DID with the same library being tested, a broken decoder could pass its own test by
-  agreeing with itself. Checking against a value derived a different way is what makes it a
-  test vector instead of a tautology.
-
-L4 verification of M1 also included mutation testing: stubbing `ed25519.verify` to
-unconditionally return `true` broke three real tests. That is the evidence that the test suite
-actually constrains the implementation, rather than just exercising it.
+It prints four beats — a real trust decision, an over-scope refusal, a spoofed-identity refusal,
+and a forged-credential refusal — each self-checked to exit `0` only if every outcome matched
+what was expected.
 
 ## Project layout
 
 ```
-app/                Next.js app router (M2's deploy skeleton — landing page, /api/health)
-lib/identity/        M1: Ed25519 keys, did:key encode/decode, challenge-response proof of possession
-.genesis/             Loop-based development process docs: the locked spec, the milestone plan,
-                       architecture decision records, and per-loop checkpoints
+app/                 Next.js app router — the live demo UI and its two API routes
+lib/identity/         did:key + Ed25519 keys, challenge-response proof of possession
+lib/credentials/      W3C Verifiable Credentials as signed JWTs (authority + history)
+lib/trust/            Revocation (Bitstring Status List), trust anchors, issuer vouching
+lib/policy/           Declarative policy engine — structured explanations, never a boolean
+lib/negotiation/      The cross-agent protocol composing all four layers above
+tests/attacks/        Named, regression, and exploratory attacks against the composed system
+.genesis/             Loop-based development process docs: locked spec, plan, ADRs, checkpoints
+docs/                 Architecture snapshot, two-year thesis, process notes, walkthrough script
 ```
 
-`lib/` is framework-free: no file under `lib/` may import from Next.js. The same identity code
-has to run unmodified in a plain Node test, inside a Next.js API route, and eventually in a
-browser (planned for M8) — a Next.js import anywhere in `lib/` would break at least one of
-those three.
+`lib/` is framework-free: no file under `lib/` may import from Next.js, and (with one exception)
+none of it performs network I/O. The same identity code runs unmodified in a plain Node test,
+inside a Next.js API route, and — since M8 — directly in a browser, client-side, with zero
+`node:` imports.
 
 ## Development notes
 
 **Turbopack is disabled for this app.** `lib/identity`'s internal imports use explicit `.js`
-suffixes on `.ts` files, which is required by its strict NodeNext `moduleResolution` (see
-`tsconfig.lib.json`). webpack resolves that correctly via `experimental.extensionAlias` in
+suffixes on `.ts` files, required by its strict NodeNext `moduleResolution` (see
+`tsconfig.lib.json`). webpack resolves that via `experimental.extensionAlias` in
 `next.config.ts`; Turbopack (Next 16's default bundler) does not yet implement `extensionAlias`
 and fails with "Module not found" on every one of `lib/identity`'s relative imports. `npm run
 dev` and `npm run build` therefore pass `--webpack` explicitly. This is a documented, supported
-fallback (webpack is still Next.js's other fully maintained production bundler), not a hack —
-but it's a real gotcha if you ever try to drop the flag.
+fallback — webpack is still Next.js's other fully maintained production bundler — not a hack, but
+it's a real gotcha if you ever drop the flag.
+
+**Use `npm ci`, never `npm install`.** npm 11.5.1 silently drops the platform-specific
+`@rolldown/binding-*` and `lightningcss-*` packages when `npm install` reconciles against an
+already-committed lockfile — after which `vitest` fails to start with no obviously-related error.
+`npm ci` installs strictly from the lockfile and is immune. CI (`.github/workflows/ci.yml`)
+asserts the rolldown binding is actually present after `npm ci` specifically so this can't
+regress silently.
+
+## Honest limits
+
+The brief rewards "this breaks when…" over silence about it, so here is where this system's
+guarantees actually end:
+
+- **Revocation needs a network, and is the only check that does.** Signature, expiry, subject
+  binding, and issuer anchoring all verify offline. "Is this still valid *right now*" cannot —
+  it's a statement about the present, made by a party other than the verifier, and no signature
+  produced in the past can attest to a fact that keeps changing after it was signed.
+- **The single-use nonce cache is per-`Supplier`-instance and in-memory.** A stateless,
+  per-request server (the common serverless pattern) builds a fresh, empty cache on every
+  request and silently defeats single-use entirely — every "new" request starts with no memory
+  of any nonce it has already consumed. A real deployment needs that bookkeeping moved to shared
+  storage (Redis, a database row) with the same verify-before-consume ordering.
+  **This includes the demo deployed above:** `app/lib/negotiation-service.ts` constructs a fresh
+  `Supplier` inside the request handler, so the live site has no cross-request replay protection
+  at all. That is fine for a demo where every request is its own story, and it is exactly the
+  mistake this limit describes — so it is named here rather than left as an abstraction.
+  To be precise about what that does and does not mean: the *mechanism* is absent, but the gap
+  is latent rather than live. The endpoint accepts only `{amount, attack}` and never round-trips
+  a challenge to the client, so there is no channel through which a captured proof could be
+  submitted a second time. It would matter the moment this pattern were reused for a real
+  multi-request negotiation API, which is exactly why it is written down.
+- **Failed proof-of-possession attempts are unthrottled, by design.** A challenge nonce is only
+  consumed on a *successful* answer, so an attacker gets unlimited free retries against a live
+  challenge before it expires. Rate-limiting is treated as a deployment concern (a proxy, a WAF),
+  not something a protocol library should own.
+- **Only `did:key`.** No `did:web`, no `did:ion`, no resolution against any registry. Identity in
+  this project is exactly as strong, and exactly as limited, as "the identifier is the public
+  key" — lose the private key and there is no recovery path, by construction.
+- **Scope bounds are numeric-only, and only upper-bound-plus-non-negative.** Every bound in the
+  policy engine is a `maxX`-style ceiling; a negative requested value is refused outright (fixed
+  after M7's attack suite found it was silently permitted — see `docs/NOTES.md`), but there is no
+  general signed range (a real `minScope`, or "a refund between −1000 and 0 is fine") and no
+  bound on non-numeric scope dimensions like a string enum.
+- **A vouch cannot be revoked, only expire.** Issuer-to-issuer vouching (`lib/trust/vouch.ts`)
+  checks an optional `validUntil`, but there is no status-list check for a vouch the way there is
+  for a credential — a compromised voucher's vouch is live until it naturally expires.
+- **Vouching is depth-1 by design.** `VOUCH_DEPTH_LIMIT = 1` is a fixed constant, not a
+  configurable policy. A vouches for B; B vouching for C is not walked or trusted — there is no
+  chain-of-trust beyond one hop, and no cycle-detection code, because there is no chain to have a
+  cycle in.
+
+## Status
+
+Eight of nine milestones are done; M9 (this one — documentation and verification) is in
+progress. This is a public, honest count.
+
+| # | Milestone | Status |
+|---|---|---|
+| M1 | Identity: `did:key` + proof of possession | **Done.** |
+| M2 | Deploy a live skeleton to Vercel | **Done.** Live at https://agent-trust-layer-pi.vercel.app. |
+| M3 | Verifiable credentials: issue and verify | **Done.** |
+| M4 | Revocation and trust anchors | **Done.** |
+| M5 | Policy engine with explanations | **Done.** |
+| M6 | Cross-agent negotiation | **Done.** |
+| M7 | The attack suite | **Done.** |
+| M8 | The demo UI | **Done.** Live on the homepage above. |
+| M9 | Deliverables (docs, thesis, clean-clone check) | In progress (this document is part of it). |
+
+The full milestone plan, each milestone's exact demo command and freeze boundary, is in
+[`.genesis/PLAN.md`](.genesis/PLAN.md). The architecture decision records — including several
+milestones' own accounts of being rejected on first independent verification, and exactly why —
+are in [`.genesis/decisions/`](.genesis/decisions/); see [`docs/NOTES.md`](docs/NOTES.md) for the
+count and two concrete examples.
 
 ## Standards used
 
 - [W3C Decentralized Identifiers (DIDs)](https://www.w3.org/TR/did-core/) — the `did:key`
-  method specifically ([w3c-ccg/did-method-key](https://w3c-ccg.github.io/did-method-key/)).
-- [W3C Verifiable Credentials](https://www.w3.org/TR/vc-data-model/) — planned for M3; not yet
-  implemented.
+  method specifically ([w3c-ccg/did-method-key](https://w3c-ccg.github.io/did-key-spec/)).
+- [W3C Verifiable Credentials 2.0](https://www.w3.org/TR/vc-data-model-2.0/), secured as JWTs
+  per [VC-JOSE-COSE](https://www.w3.org/TR/vc-jose-cose/).
+- [W3C Bitstring Status List v1.0](https://www.w3.org/TR/vc-bitstring-status-list/) for
+  revocation.
+
+## More
+
+- **[Architecture](docs/ARCHITECTURE.md)** — the four-layer diagram, with the real test behind
+  every refusal it claims.
+- **[Two-year thesis](docs/THESIS.md)** — where agent trust infrastructure is headed, in under
+  300 words.
+- **[Process notes](docs/NOTES.md)** — AI tooling, key design decisions, what's deliberately out
+  of scope, and how the maker/checker verification process actually went (including where it
+  rejected its own work and why).
+- **[Walkthrough script](docs/WALKTHROUGH.md)** — a beat-by-beat 90-second script for recording a
+  demo off the live page.
