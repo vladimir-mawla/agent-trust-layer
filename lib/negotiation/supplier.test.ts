@@ -19,7 +19,7 @@ import { issueAuthorityCredential } from "../credentials/index.js";
 import { evaluateAuthorityCredentialTrust, issueVouch, TrustAnchorSet, type CredentialStatusEntry, type StatusListResolver } from "../trust/index.js";
 import { KeyHolder } from "./agent.js";
 import { buildFourBeatFixture } from "./scenario.js";
-import { Supplier } from "./supplier.js";
+import { MAX_VOUCHES_PER_PRESENTATION, sanitizeScope, Supplier } from "./supplier.js";
 import type { NegotiationRequest, Presentation } from "./messages.js";
 
 const NOW = Date.parse("2026-09-17T00:00:00.000Z");
@@ -1078,3 +1078,137 @@ describe("consumption happens only after possession is genuinely proven (FIX B, 
   });
 });
 
+// =========================================================================
+// SECOND L4 M6 REVIEW — FIX C, guarantee #1: `sanitizeScope` must hand
+// onward a plain, inert COPY, not the caller's own object by reference.
+// Mutation testing found that gutting this to a passthrough broke none
+// of the (then) 288 tests, because `lib/policy/engine.ts`'s own guard
+// (`safe-scope-read.ts`) independently tolerates the same hostile scope
+// shapes and produces an identical DECISION either way — testing THROUGH
+// the engine cannot distinguish "copied defensively" from "passed by
+// reference, but still safely read downstream". Only calling
+// `sanitizeScope` directly and inspecting its return value's identity
+// can pin this property.
+// =========================================================================
+describe("sanitizeScope's own boundary property: a plain, inert copy (FIX C, second L4 M6 review)", () => {
+  it("returns a NEW object, never the same reference as its input, and mutations after the call cross the boundary in NEITHER direction", () => {
+    const input: Record<string, unknown> = { amount: 100, currency: "USD" };
+    const copy = sanitizeScope(input);
+
+    // The property a reference-passthrough mutant would violate:
+    expect(copy).not.toBe(input);
+    expect(copy).toEqual({ amount: 100, currency: "USD" });
+
+    // Mutating the ORIGINAL after the call must not reach the copy —
+    // this is what "inert" means, and what a real Supplier composition
+    // boundary needs against a counterparty that retains a handle to
+    // the object it handed over.
+    input.amount = 999_999;
+    (input as Record<string, unknown>).injected = "attacker-added-after-the-call";
+    expect(copy.amount).toBe(100);
+    expect(copy).not.toHaveProperty("injected");
+
+    // And the reverse: mutating the COPY must not reach back to the
+    // caller's original object.
+    (copy as Record<string, unknown>).pokedFromCopy = "should-not-appear-on-input";
+    expect(input).not.toHaveProperty("pokedFromCopy");
+  });
+
+  it("an empty/non-object input still produces its own fresh, independently-mutable object each call", () => {
+    const a = sanitizeScope(null);
+    const b = sanitizeScope(null);
+    expect(a).not.toBe(b);
+    expect(a).toEqual({});
+    (a as Record<string, unknown>).x = 1;
+    expect(b).not.toHaveProperty("x");
+  });
+});
+
+// =========================================================================
+// SECOND L4 M6 REVIEW — FIX C, guarantee #2: the vouch cap
+// (`MAX_VOUCHES_PER_PRESENTATION`) demonstrably changes real outcomes,
+// yet mutation testing found removing its `.slice` broke none of the
+// (then) 288 tests — nothing in the suite exercised enough vouches at
+// once to notice. This pins the cap's actual, observable effect: a real
+// vouch beyond the cap is dropped and never reaches `evaluateIssuerTrust`
+// at all, while the identical vouch placed within the cap is accepted.
+// =========================================================================
+describe("vouch cap enforcement regression (FIX C, second L4 M6 review)", () => {
+  const CAP_ACTION = "vouch-cap-test-action";
+  const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+
+  interface RawIdentity {
+    readonly did: Did;
+    readonly privateKey: Uint8Array;
+  }
+  function makeRawIdentity(): RawIdentity {
+    const { publicKey, privateKey } = generateKeyPair();
+    return { did: encodeDidKey(publicKey), privateKey };
+  }
+
+  function capPolicy(): unknown {
+    return {
+      id: "vouch-cap-test-policy",
+      version: "1.0.0",
+      revocationHandling: { requireChecked: false, acknowledgedBy: "test-fixture", reason: "no status list wired up for this fixture" },
+      rules: [{ kind: "action-scope", id: "R-cap", description: "x", action: CAP_ACTION, maxScope: { amount: 500 } }],
+    };
+  }
+
+  function issueTestAuthority(issuer: RawIdentity, subject: RawIdentity): string {
+    return issueAuthorityCredential({
+      issuerPrivateKey: issuer.privateKey,
+      issuerDid: issuer.did,
+      subjectDid: subject.did,
+      action: CAP_ACTION,
+      scope: { amount: 100 },
+      validFrom: new Date(NOW).toISOString(),
+      validUntil: new Date(NOW + ONE_YEAR_MS).toISOString(),
+      now: NOW,
+    });
+  }
+
+  it(`a real vouch beyond the ${MAX_VOUCHES_PER_PRESENTATION}-entry cap (as entry #${MAX_VOUCHES_PER_PRESENTATION + 1}) is dropped and refused, while the SAME vouch placed within the first ${MAX_VOUCHES_PER_PRESENTATION} entries is accepted — fails if the cap's .slice is removed`, async () => {
+    const anchor = makeRawIdentity();
+    const issuerB = makeRawIdentity();
+    const presenter = makeRawIdentity();
+    const anchors = new TrustAnchorSet([anchor.did]);
+
+    const realVouch = issueVouch({ voucherPrivateKey: anchor.privateKey, voucherDid: anchor.did, vouchedIssuerDid: issuerB.did, now: NOW });
+    const authorityJwt = issueTestAuthority(issuerB, presenter);
+    const bogusVouches = Array.from({ length: MAX_VOUCHES_PER_PRESENTATION }, (_, i) => `not-a-real-vouch-${i}`);
+
+    // Case A: MAX_VOUCHES_PER_PRESENTATION bogus vouches, THEN the one
+    // real vouch as the (MAX + 1)th entry. If the cap is enforced, the
+    // real vouch never reaches `evaluateIssuerTrust` — refused, since no
+    // vouch among the surviving (capped) entries verifies.
+    const supplierA = new Supplier({ policy: capPolicy(), anchors, now: NOW });
+    const challengeA = supplierA.issueChallenge();
+    const proofA = provePossession(presenter.privateKey, presenter.did, challengeA);
+    const decisionA = await supplierA.evaluatePresentation(
+      challengeA,
+      { proof: proofA, credentials: { authorityJwt, vouches: [...bogusVouches, realVouch] } },
+      { action: CAP_ACTION, scope: { amount: 50 } },
+    );
+    expect(decisionA.stage).toBe("policy");
+    expect(decisionA.permitted).toBe(false);
+    if (decisionA.stage === "policy" && !decisionA.permitted) {
+      expect(decisionA.explanation.refusalKind).toBe("untrusted-issuer");
+    }
+
+    // Case B: the IDENTICAL real vouch, but placed WITHIN the cap
+    // (replacing the last bogus entry) — survives, verifies, accepted.
+    const withinCap = [...bogusVouches.slice(0, MAX_VOUCHES_PER_PRESENTATION - 1), realVouch];
+    expect(withinCap.length).toBe(MAX_VOUCHES_PER_PRESENTATION);
+    const supplierB = new Supplier({ policy: capPolicy(), anchors, now: NOW });
+    const challengeB = supplierB.issueChallenge();
+    const proofB = provePossession(presenter.privateKey, presenter.did, challengeB);
+    const decisionB = await supplierB.evaluatePresentation(
+      challengeB,
+      { proof: proofB, credentials: { authorityJwt, vouches: withinCap } },
+      { action: CAP_ACTION, scope: { amount: 50 } },
+    );
+    expect(decisionB.stage).toBe("policy");
+    expect(decisionB.permitted).toBe(true);
+  });
+});

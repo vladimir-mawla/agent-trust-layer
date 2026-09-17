@@ -91,8 +91,18 @@ import type { NegotiationRequest, Presentation } from "./messages.js";
  *  genuinely holds vouches from several candidate anchors) while still
  *  bounding the worst-case synchronous verification cost of a single
  *  `evaluatePresentation` call to a small constant regardless of how
- *  many entries a hostile counterparty stuffs into the message. */
-const MAX_VOUCHES_PER_PRESENTATION = 16;
+ *  many entries a hostile counterparty stuffs into the message.
+ *
+ *  Exported so `supplier.test.ts`'s regression test (FIX C, second L4
+ *  M6 review) can size its fixtures off the real cap instead of a
+ *  second, independently-hardcoded "16" that could silently drift out
+ *  of sync with this one. Mutation testing found that removing the
+ *  `.slice` this constant feeds (below, in `sanitizeVouches`) broke
+ *  none of the 288 existing tests, even though the cap demonstrably
+ *  changes real outcomes (a real vouch beyond the cap is dropped and
+ *  never verified) — nothing in the suite had ever exercised more than
+ *  a handful of vouches at once. */
+export const MAX_VOUCHES_PER_PRESENTATION = 16;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -139,8 +149,21 @@ function hasProofShape(proof: unknown): proof is { readonly did: unknown; readon
  * the property read itself) is individually wrapped so a throw at ANY
  * one of them drops just that one field (or, for a top-level enumeration
  * failure, yields an empty scope) rather than propagating.
+ *
+ * Exported ONLY so `supplier.test.ts` can assert this function's own
+ * copying behaviour directly (second L4 M6 review, FIX C): mutation
+ * testing found that gutting this function to pass `rawScope` through BY
+ * REFERENCE (dropping the defensive copy, keeping only the shape check)
+ * broke none of the 288 existing tests, because `lib/policy/engine.ts`'s
+ * own guard (`safe-scope-read.ts`) independently tolerates the same
+ * hostile accessors and produces the identical DECISION either way —
+ * that guard was never a substitute for this one, but from outside
+ * `evaluatePresentation` the two are indistinguishable. The only way to
+ * pin "this function itself still copies" is to call it directly and
+ * inspect its return value's identity, not the decision it eventually
+ * feeds into.
  */
-function sanitizeScope(rawScope: unknown): Record<string, unknown> {
+export function sanitizeScope(rawScope: unknown): Record<string, unknown> {
   if (typeof rawScope !== "object" || rawScope === null) {
     return {};
   }
