@@ -81,3 +81,66 @@ code {
   border-radius: 4px;
   font-size: 0.9em;
 }
+
+h2 {
+  font-size: 1rem;
+  margin: 2rem 0 0.75rem;
+}
+
+/* Milestone ledger. Status is encoded in form as well as words — a left rule
+   per state — so progress reads at a glance without parsing every row. */
+.ledger {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.ledger li {
+  display: grid;
+  grid-template-columns: 2.4rem 1fr auto;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+  font-size: 0.875rem;
+}
+
+.ledger li[data-status="done"] { box-shadow: inset 3px 0 0 #2d7355; }
+.ledger li[data-status="in-progress"] { box-shadow: inset 3px 0 0 #b06a12; }
+.ledger li[data-status="queued"] { box-shadow: inset 3px 0 0 var(--border); }
+
+.ledger .mid {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.ledger .mstate {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ledger li[data-status="done"] .mstate { color: #2d7355; }
+.ledger li[data-status="in-progress"] .mstate { color: #b06a12; }
+
+@media (prefers-color-scheme: dark) {
+  .ledger li[data-status="done"] { box-shadow: inset 3px 0 0 #5aa682; }
+  .ledger li[data-status="in-progress"] { box-shadow: inset 3px 0 0 #d69a45; }
+  .ledger li[data-status="done"] .mstate { color: #5aa682; }
+  .ledger li[data-status="in-progress"] .mstate { color: #d69a45; }
+}
+
+@media (max-width: 420px) {
+  .ledger li { grid-template-columns: 2.2rem 1fr; }
+  .ledger .mstate { grid-column: 2; }
+}
