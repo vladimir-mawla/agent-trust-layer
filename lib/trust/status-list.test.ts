@@ -458,3 +458,50 @@ describe("FINDING 1 — status list issuer must match the credential's own issue
     expect(result.reason).toContain(throwaway.did);
   });
 });
+
+// ---------------------------------------------------------------------
+// FINDING 2 (MEDIUM) regression — checkRevocation had no timeout around
+// the injected resolver, so a resolver that never settles hung the whole
+// trust decision indefinitely (fail-closed logic never ran, because
+// nothing ever settled). Fixed with a caller-overridable
+// `resolverTimeoutMs`, defaulting to `DEFAULT_RESOLVER_TIMEOUT_MS`,
+// treating expiry as `indeterminate`.
+// ---------------------------------------------------------------------
+describe("FINDING 2 — a hanging resolver must not hang checkRevocation forever", () => {
+  it("times out and refuses (fail closed) when the resolver never settles", async () => {
+    const issuer = makeIdentity();
+    const hangingResolver: StatusListResolver = () => new Promise<string>(() => {}); // never resolves or rejects
+
+    const result = await checkRevocation(
+      { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
+      hangingResolver,
+      issuer.did,
+      { now: 0, resolverTimeoutMs: 25 },
+    );
+
+    expect(result.outcome).toBe("indeterminate");
+    if (result.outcome !== "indeterminate") throw new Error("expected indeterminate");
+    expect(result.cause.kind).toBe("status-list-resolver-timeout");
+  });
+
+  it("still succeeds for a slow-but-successful resolver that settles inside the timeout window", async () => {
+    const issuer = makeIdentity();
+    const jwt = issueStatusListCredential({
+      issuerPrivateKey: issuer.privateKey,
+      issuerDid: issuer.did,
+      statusPurpose: "revocation",
+      sizeBits: 128,
+      now: 0,
+    });
+    const slowButSuccessful: StatusListResolver = () => new Promise<string>((resolve) => setTimeout(() => resolve(jwt), 10));
+
+    const result = await checkRevocation(
+      { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
+      slowButSuccessful,
+      issuer.did,
+      { now: 0, resolverTimeoutMs: 200 },
+    );
+
+    expect(result.outcome).toBe("active");
+  });
+});

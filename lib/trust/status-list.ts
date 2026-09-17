@@ -66,6 +66,7 @@ import {
   StatusListIssuerUnresolvableError,
   StatusListMalformedError,
   StatusListPurposeMismatchError,
+  StatusListResolverTimeoutError,
   StatusListSignatureInvalidError,
   StatusListStaleError,
   StatusListUnavailableError,
@@ -85,6 +86,33 @@ export const BITSTRING_STATUS_LIST_ENTRY_TYPE = "BitstringStatusListEntry" as co
 
 /** Default freshness threshold — see the module comment. */
 export const DEFAULT_MAX_STATUS_LIST_AGE_MS = 5 * 60 * 1000;
+
+/**
+ * Default upper bound on how long `checkRevocation` will wait for the
+ * injected `resolver` to settle (resolve OR reject) before giving up on
+ * it and failing closed. Without this, a resolver that never settles —
+ * a hostile implementation, or just a hung socket with no timeout of its
+ * own — hangs `checkRevocation` (and therefore the whole trust decision
+ * built on top of it) forever, since `await`ing a promise that never
+ * settles never returns control to the fail-closed logic that would
+ * otherwise refuse the credential.
+ *
+ * 5 seconds, chosen the same deliberate, not-reused-by-coincidence way
+ * `DEFAULT_MAX_STATUS_LIST_AGE_MS` was: it answers a genuinely different
+ * question ("how long is one fetch+verify attempt allowed to take" vs.
+ * "how old is a successfully-fetched list allowed to be") and needs a
+ * different order of magnitude. Five seconds is generous for a resolver
+ * that is a real (if slow) network fetch — well beyond ordinary
+ * fetch/verify latency — while still being short enough that a hung
+ * resolver fails a single trust decision fast rather than stalling a
+ * caller (or, worse, an interactive demo) indefinitely. Like
+ * `maxStatusListAgeMs`, this is a parameter (`resolverTimeoutMs`), not a
+ * hardcoded constant, so a caller with different latency expectations
+ * (a slower resolver, or a stricter one for a latency-sensitive path)
+ * can override it — the fail-closed DIRECTION (timeout ⇒ indeterminate
+ * ⇒ refuse) is not configurable.
+ */
+export const DEFAULT_RESOLVER_TIMEOUT_MS = 5_000;
 
 /**
  * The `credentialStatus` object §1.2 says an issued credential carries,
@@ -230,6 +258,11 @@ export interface CheckRevocationOptions {
   /** Override the freshness threshold. Defaults to
    *  `DEFAULT_MAX_STATUS_LIST_AGE_MS`. */
   readonly maxStatusListAgeMs?: number;
+  /** Override how long the injected `resolver` is allowed to take before
+   *  `checkRevocation` gives up on it and fails closed. Defaults to
+   *  `DEFAULT_RESOLVER_TIMEOUT_MS`. See that constant's comment for why
+   *  this exists and how the default was chosen. */
+  readonly resolverTimeoutMs?: number;
 }
 
 export type RevocationStatus =
@@ -306,6 +339,37 @@ function validateStatusListCredential(payload: unknown): {
 }
 
 /**
+ * Race `promise` (the injected resolver's call, already in flight)
+ * against a timer. Whichever settles first determines the outcome — but
+ * unlike a bare `Promise.race`, this ALWAYS clears the timer once either
+ * side settles, so a resolver that resolves/rejects promptly leaves no
+ * dangling `setTimeout` behind it (which would otherwise keep a Node
+ * process alive until the timer fires, or leak across many calls in a
+ * long-running server). The timer is also `unref()`d as a second,
+ * independent layer of defence: even if some caller path ever managed to
+ * skip the `clearTimeout` below, an unref'd timer still cannot by itself
+ * keep the process from exiting.
+ */
+function withResolverTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => Error): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(onTimeout()), timeoutMs);
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (cause: unknown) => {
+        clearTimeout(timer);
+        reject(cause);
+      },
+    );
+  });
+}
+
+/**
  * The one genuinely networked check in this project. Resolves, verifies
  * (signature, ISSUER, AND freshness), and consults a Bitstring Status
  * List for a single credential's status. Fails closed for every failure
@@ -361,6 +425,7 @@ export async function checkRevocation(
 ): Promise<RevocationStatus> {
   const now = options.now ?? Date.now();
   const maxAgeMs = options.maxStatusListAgeMs ?? DEFAULT_MAX_STATUS_LIST_AGE_MS;
+  const resolverTimeoutMs = options.resolverTimeoutMs ?? DEFAULT_RESOLVER_TIMEOUT_MS;
 
   // Validate the entry itself before doing any I/O — an invalid index
   // is a caller/issuer bug, not something a network round trip can fix.
@@ -376,8 +441,15 @@ export async function checkRevocation(
 
   let jws: string;
   try {
-    jws = await resolver(entry.statusListCredential);
+    jws = await withResolverTimeout(
+      resolver(entry.statusListCredential),
+      resolverTimeoutMs,
+      () => new StatusListResolverTimeoutError(entry.statusListCredential, resolverTimeoutMs),
+    );
   } catch (cause) {
+    if (cause instanceof StatusListResolverTimeoutError) {
+      return { outcome: "indeterminate", reason: cause.message, cause };
+    }
     const err = new StatusListUnavailableError(entry.statusListCredential, { cause });
     return { outcome: "indeterminate", reason: err.message, cause: err };
   }

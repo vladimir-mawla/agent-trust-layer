@@ -28,6 +28,7 @@ export type RevocationFailureKind =
   | "status-list-issuer-mismatch"
   | "status-list-stale"
   | "status-list-purpose-mismatch"
+  | "status-list-resolver-timeout"
   | "bitstring-index-invalid";
 
 /** The injected resolver threw or rejected, or returned something that
@@ -152,6 +153,26 @@ export class StatusListPurposeMismatchError extends Error {
   }
 }
 
+/**
+ * The injected resolver did not settle (resolve OR reject) within the
+ * configured timeout (`CheckRevocationOptions.resolverTimeoutMs`, default
+ * `DEFAULT_RESOLVER_TIMEOUT_MS` — see `status-list.ts`). A resolver that
+ * hangs forever (a hostile or merely broken network dependency) must not
+ * be allowed to hang the whole trust decision forever: this error is how
+ * `checkRevocation` still settles, fail-closed, when that happens.
+ */
+export class StatusListResolverTimeoutError extends Error {
+  override readonly name = "StatusListResolverTimeoutError";
+  readonly kind: RevocationFailureKind = "status-list-resolver-timeout";
+
+  constructor(
+    readonly url: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`Status list resolver for ${url} did not settle within ${timeoutMs}ms`);
+  }
+}
+
 /** `statusListIndex` (after multiplying by `statusSize`) is negative,
  *  non-integer, or beyond the decompressed bitstring's length. Always
  *  converted to a structured failure, never left to throw an unhandled
@@ -175,6 +196,7 @@ export type RevocationError =
   | StatusListIssuerMismatchError
   | StatusListStaleError
   | StatusListPurposeMismatchError
+  | StatusListResolverTimeoutError
   | BitstringIndexError;
 
 // ---------------------------------------------------------------------
