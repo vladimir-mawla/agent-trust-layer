@@ -4,20 +4,36 @@
  * wants to do), and M4's own verified `TrustDecision`/`HistoryTrustDecision`
  * results into one explainable `PolicyDecision`.
  *
- * ## `no-unverified-claim-reaches-policy`, made structural
+ * ## `no-unverified-claim-reaches-policy`, made structural — for a
+ * TypeScript caller, and made to FAIL CLOSED for everyone else
  *
  * `evaluatePolicyRequest`'s `authority` parameter is typed
  * `TrustDecision<AuthorityCredential> | null` and `history` is typed
- * `readonly HistoryTrustDecision[]` — never `string`, never `unknown`,
- * never a bare JWT. There is no code path in this module that calls
+ * `readonly HistoryTrustDecision[]` — never `string`, never a bare JWT.
+ * There is no code path in this module that calls
  * `verifyAuthorityCredential`/`verifyHistoryAttestation` itself, or that
  * accepts a raw credential and verifies it inline: the ONLY way to
  * produce a `TrustDecision`/`HistoryTrustDecision` is to actually run
  * `lib/trust`'s `evaluateAuthorityCredentialTrust`/
  * `evaluateHistoryAttestationTrust`, which themselves can only be
  * produced by running M3's real verification chain first (see those
- * modules' own comments). A caller cannot "accidentally" hand this
- * engine something unverified and have it type-check.
+ * modules' own comments).
+ *
+ * That is true, and useful, ONLY for a caller who goes through `tsc` and
+ * never casts. ADR 0004 itself says claims arrive as JSON, not
+ * TypeScript — a value crossing a real serialization boundary (a queued
+ * message, a replayed fixture, anything that was `any`/`unknown` a few
+ * lines up the call stack) can reach this function *looking like* a
+ * `TrustDecision` without being one, and a bare type annotation cannot
+ * stop that. `decision-guards.ts`'s `checkAuthorityInput`/
+ * `sanitizeHistoryInput` are the runtime boundary that makes the "cannot
+ * accidentally hand this engine something unverified" property hold for
+ * THOSE callers too: anything that isn't a well-formed
+ * `TrustDecision`/`HistoryTrustDecision` is treated exactly as if it
+ * were absent — fail closed, and always as a structured
+ * `PolicyDecision`, never a thrown `TypeError` (see FINDING 1, L4 M5
+ * review — this is the same class of defect that got M3 rejected: an
+ * unhandled exception instead of a structured refusal).
  *
  * ## TIGHTEN_NEVER_LOOSEN, tied together
  *
@@ -72,6 +88,7 @@ import { validatePolicy } from "./validate.js";
 import { computeAuthorityEnvelope, type AuthorityEnvelope } from "./envelope.js";
 import { computeHistoryConstraints } from "./history-constraints.js";
 import { computeFieldBound } from "./permitted-scope.js";
+import { checkAuthorityInput, sanitizeHistoryInput } from "./decision-guards.js";
 import {
   GATE_ACTION_MATCH,
   GATE_AUTHORITY_REQUIRED,
@@ -130,17 +147,31 @@ function isActionScopeRule(rule: { readonly kind: string }): rule is ActionScope
 
 export function evaluatePolicyRequest(input: EvaluatePolicyRequestInput): PolicyDecision {
   const policy: Policy = validatePolicy(input.policy);
-  const { request, authority, history } = input;
+  const { request } = input;
+
+  // --- FINDING 1: `authority`/`history` are typed as trusted decisions,
+  //     but a value crossing a real boundary (not `tsc`) can arrive
+  //     looking like one without being one. Normalize BOTH before any
+  //     property of either is ever read, so nothing below this line can
+  //     throw a bare TypeError for a malformed decision — see
+  //     `decision-guards.ts` and this module's own comment. -------------
+  const history = sanitizeHistoryInput(input.history);
+  const authorityCheck = checkAuthorityInput(input.authority);
 
   // --- Gate: an authority credential is always required -------------
-  if (authority === null) {
+  if (authorityCheck.kind !== "well-formed") {
+    const narrative =
+      authorityCheck.kind === "absent"
+        ? `no authority credential was presented at all for action "${request.action}"; ${history.length} history attestation(s) were present but history alone can never grant authority (ADR 0002)`
+        : `the "authority" input was not a well-formed trust decision (${authorityCheck.detail}); a malformed or unrecognised decision is treated exactly as if no authority credential had been presented at all for action "${request.action}" — fail closed, never a thrown error (FINDING 1)`;
     return refuse(
       "no-authority-credential",
       GATE_AUTHORITY_REQUIRED,
-      fieldEvidence("authority", { requested: request.action, permitted: null }),
-      `no authority credential was presented at all for action "${request.action}"; ${history.length} history attestation(s) were present but history alone can never grant authority (ADR 0002)`,
+      fieldEvidence("authority", { requested: request.action, permitted: null, ...(authorityCheck.kind === "malformed" ? { note: authorityCheck.detail } : {}) }),
+      narrative,
     );
   }
+  const authority = authorityCheck.decision;
 
   // --- Gate: the presented authority credential must itself be accepted by M4
   if (!authority.accepted) {

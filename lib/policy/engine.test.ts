@@ -5,7 +5,7 @@ import { TrustAnchorSet } from "../trust/anchors.js";
 import { issueStatusListCredential } from "../trust/status-list.js";
 import { evaluateAuthorityCredentialTrust, evaluateHistoryAttestationTrust, type TrustDecision } from "../trust/index.js";
 import type { AuthorityCredential } from "../credentials/index.js";
-import { evaluatePolicyRequest, type PolicyDecision } from "./engine.js";
+import { evaluatePolicyRequest, type EvaluatePolicyRequestInput, type PolicyDecision } from "./engine.js";
 import { ACTION_SCOPE_RULE_KIND, HISTORY_NARROW_RULE_KIND, type Policy } from "./policy-types.js";
 
 interface Identity {
@@ -395,5 +395,153 @@ describe("every-decision-is-explainable — property across every case exercised
       // alongside rule/field/narrative, never standing in on their own.
       expect(["permitted", "refused"]).toContain(decision.permitted ? "permitted" : "refused");
     }
+  });
+});
+
+// ---------------------------------------------------------------------
+// FINDING 1 (L4 M5 review): malformed `authority`/`history` inputs must
+// fail closed as a structured `PolicyDecision`, never throw a bare
+// TypeError. `validatePolicy` already defends the `policy` argument this
+// thoroughly; before this fix, `authority`/`history` got none of it
+// because they're typed as trusted `TrustDecision`s — true only for a
+// caller that never crosses a serialization boundary (see engine.ts's
+// module comment and ADR 0004's own "claims arrive as JSON, not
+// TypeScript"). Every case below deliberately bypasses TypeScript (via
+// an untyped raw input) the way a JSON-sourced caller would.
+// ---------------------------------------------------------------------
+function callWithRawInput(raw: Record<string, unknown>): PolicyDecision {
+  return evaluatePolicyRequest(raw as unknown as EvaluatePolicyRequestInput);
+}
+
+describe("evaluatePolicyRequest — malformed authority/history inputs fail closed, never throw (FINDING 1)", () => {
+  const policy = purchasePolicy();
+  const request = { action: "purchase", scope: { maxAmount: 1 } };
+
+  it("authority: undefined — returns a structured refusal, never throws", () => {
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = record(callWithRawInput({ policy, request, authority: undefined, history: [] }));
+    }).not.toThrow();
+    expect(decision?.permitted).toBe(false);
+    if (!decision || decision.permitted) throw new Error("expected refusal");
+    expect(decision.explanation.refusalKind).toBe("no-authority-credential");
+    expectNonEmptyExplanation(decision);
+  });
+
+  it("authority: {} — returns a structured refusal, never throws", () => {
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = record(callWithRawInput({ policy, request, authority: {}, history: [] }));
+    }).not.toThrow();
+    expect(decision?.permitted).toBe(false);
+    if (!decision || decision.permitted) throw new Error("expected refusal");
+    expect(decision.explanation.refusalKind).toBe("no-authority-credential");
+    expectNonEmptyExplanation(decision);
+  });
+
+  it("authority: {accepted: true} with every nested field missing — returns a structured refusal, never throws", () => {
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = record(callWithRawInput({ policy, request, authority: { accepted: true }, history: [] }));
+    }).not.toThrow();
+    expect(decision?.permitted).toBe(false);
+    if (!decision || decision.permitted) throw new Error("expected refusal");
+    expect(decision.explanation.refusalKind).toBe("no-authority-credential");
+    expectNonEmptyExplanation(decision);
+  });
+
+  it("authority: {accepted: false, stage: <unrecognised>} — returns a structured refusal, never throws (engine.ts used to assume anything not credential-verification/issuer-trust must be revocation)", () => {
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = record(callWithRawInput({ policy, request, authority: { accepted: false, stage: "some-future-stage", reason: "x" }, history: [] }));
+    }).not.toThrow();
+    expect(decision?.permitted).toBe(false);
+    if (!decision || decision.permitted) throw new Error("expected refusal");
+    expect(decision.explanation.refusalKind).toBe("no-authority-credential");
+    expectNonEmptyExplanation(decision);
+  });
+
+  it("history: not an array at all — returns a structured refusal, never throws", () => {
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = record(callWithRawInput({ policy, request, authority: null, history: "not-an-array" }));
+    }).not.toThrow();
+    expect(decision?.permitted).toBe(false);
+    if (!decision || decision.permitted) throw new Error("expected refusal");
+    expect(decision.explanation.refusalKind).toBe("no-authority-credential");
+    expectNonEmptyExplanation(decision);
+  });
+
+  // Both fixtures below deliberately include a `history-narrow` rule
+  // matching the request's action — WITHOUT one, `computeHistoryConstraints`
+  // never even iterates into `history`'s individual entries (its outer
+  // loop is over policy rules first), so a garbage entry would be
+  // "dropped" merely by never being looked at, not by surviving the
+  // guard. With the rule present, `history-constraints.ts:76`
+  // (`decision.credentialVerification.credential...`) is the exact line
+  // that used to throw for `{ accepted: true }` and `null` entries.
+  const policyWithHistoryRule: Policy = {
+    id: "policy-garbage-history-fixture",
+    version: "1.0.0",
+    revocationHandling: { requireChecked: true },
+    rules: [
+      { kind: ACTION_SCOPE_RULE_KIND, id: "R-purchase", description: "x", action: "purchase", maxScope: { maxAmount: 500 } },
+      {
+        kind: HISTORY_NARROW_RULE_KIND,
+        id: "R-narrow",
+        description: "narrows on disputes (irrelevant to whether it fires here — the point is the loop reaches every history entry)",
+        action: "purchase",
+        observationType: "disputes-observed",
+        metric: "disputeCount",
+        operator: "gte",
+        threshold: 3,
+        scopeField: "maxAmount",
+        narrowedMax: 100,
+      },
+    ],
+  };
+
+  it("history: [{accepted: true}] — a garbage entry alongside a REAL accepted authority is dropped, never fatal, and the real permit still goes through", async () => {
+    const issuer = makeIdentity();
+    const subject = makeIdentity();
+    const anchors = new TrustAnchorSet([issuer.did]);
+    const authority = await acceptedAuthority(issuer, subject, anchors, { scope: { maxAmount: 500 }, withRevocationChecked: true });
+
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = record(
+        callWithRawInput({
+          policy: policyWithHistoryRule,
+          request: { action: "purchase", scope: { maxAmount: 200 } },
+          authority,
+          history: [{ accepted: true }],
+        }),
+      );
+    }).not.toThrow();
+    expect(decision?.permitted).toBe(true);
+    if (!decision) throw new Error("expected a decision");
+    expectNonEmptyExplanation(decision);
+  });
+
+  it("history: an array containing null alongside a real accepted authority — null is dropped, never fatal", async () => {
+    const issuer = makeIdentity();
+    const subject = makeIdentity();
+    const anchors = new TrustAnchorSet([issuer.did]);
+    const authority = await acceptedAuthority(issuer, subject, anchors, { scope: { maxAmount: 500 }, withRevocationChecked: true });
+
+    let decision: PolicyDecision | undefined;
+    expect(() => {
+      decision = record(
+        callWithRawInput({
+          policy: policyWithHistoryRule,
+          request: { action: "purchase", scope: { maxAmount: 200 } },
+          authority,
+          history: [null],
+        }),
+      );
+    }).not.toThrow();
+    expect(decision?.permitted).toBe(true);
+    if (!decision) throw new Error("expected a decision");
+    expectNonEmptyExplanation(decision);
   });
 });
