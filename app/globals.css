@@ -41,12 +41,22 @@
   }
 }
 
+/* Smooth-scrolls the "Look for Beat 3" signpost's in-page jump — but
+   only when the viewer hasn't asked for reduced motion, matched below. */
+html {
+  scroll-behavior: smooth;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     transition-duration: 0.001ms !important;
     animation-duration: 0.001ms !important;
+  }
+
+  html {
+    scroll-behavior: auto;
   }
 }
 
@@ -76,6 +86,18 @@ main {
 .dek {
   font-size: 1.05rem;
   color: var(--fg);
+}
+
+/* A one-line pointer to the page's own centrepiece (Beat 3), not a
+   second dek: smaller and quieter than .dek, with a left rule (the
+   page's established "state encoded in form" idiom, see .ledger's own
+   comment) in the neutral accent so it reads as a hint, not a heading. */
+.signpost {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0.75rem 0 0;
+  padding-left: 0.65rem;
+  border-left: 2px solid var(--accent);
 }
 
 .tabular {
@@ -298,6 +320,9 @@ h2 {
   border-radius: 10px;
   padding: 0.9rem 1rem 1.05rem;
   background: var(--card-bg);
+  /* So the signpost's #beat-spoofed-identity jump doesn't land the card
+     flush against the viewport's top edge. */
+  scroll-margin-top: 1rem;
 }
 
 .beat-card[data-permitted="true"] {

@@ -7,6 +7,11 @@ export interface BeatCardProps {
   readonly asker: string;
   readonly askedFor: string;
   readonly decision: NegotiationDecision;
+  /** DOM id for the `<article>`, so the intro can link straight to one
+   *  specific beat (e.g. `#beat-spoofed-identity` for Beat 3) — never
+   *  set by the interactive panel's one-off result, which has nothing
+   *  fixed to link to. */
+  readonly id?: string | undefined;
   /** Rendered as `data-testid="decision"` when present — the fixed four
    *  beats use this (M8's own demo command greps for it); the
    *  interactive panel's result deliberately omits it so the page's
@@ -24,13 +29,18 @@ export interface BeatCardProps {
   readonly annotation?: string | undefined;
 }
 
-export function BeatCard({ title, asker, askedFor, decision, testId, realOwnerOfClaimedDid, realOwnerLabel, annotation }: BeatCardProps) {
+export function BeatCard({ title, asker, askedFor, decision, testId, realOwnerOfClaimedDid, realOwnerLabel, annotation, id }: BeatCardProps) {
   const display = toDisplayDecision(decision);
   const chainBroken = display.stage === "proof-of-possession";
   const claimedDidMatches = chainBroken && realOwnerOfClaimedDid !== undefined ? display.claimedDid === realOwnerOfClaimedDid : undefined;
 
   return (
-    <article className="beat-card" data-permitted={display.permitted} {...(testId !== undefined ? { "data-testid": testId } : {})}>
+    <article
+      className="beat-card"
+      data-permitted={display.permitted}
+      {...(id !== undefined ? { id } : {})}
+      {...(testId !== undefined ? { "data-testid": testId } : {})}
+    >
       <header className="beat-card-head">
         <span className={`chip ${display.permitted ? "chip-permit" : "chip-refuse"}`}>
           {display.verdictLabel}

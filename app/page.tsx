@@ -58,6 +58,12 @@ export default async function Home() {
         that decided it &mdash; never a bare accept/refuse.
       </p>
 
+      <p className="signpost">
+        Look for <a href="#beat-spoofed-identity">Beat 3</a>: an impostor presents the buyer&rsquo;s own real, unexpired credential
+        while claiming a DID that is character-for-character identical to the buyer&rsquo;s &mdash; and is refused anyway, because it
+        cannot sign the challenge.
+      </p>
+
       <section aria-labelledby="demo-heading" className="demo-section">
         <h2 id="demo-heading">Four requests, one Supplier</h2>
         <p className="panel-lede">
@@ -94,6 +100,7 @@ export default async function Home() {
           {scenario.beats.map((beat) => (
             <BeatCard
               key={beat.id}
+              id={`beat-${beat.id}`}
               title={beat.title}
               asker={beat.asker}
               askedFor={beat.askedFor}
