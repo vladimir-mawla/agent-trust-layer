@@ -57,6 +57,30 @@
  * — but only for a malformed POLICY, a configuration bug this Supplier
  * was built with, never for anything a counterparty presents; see that
  * module's own comment for why that distinction is deliberate.
+ *
+ * DEPLOYMENT WARNING (FIX D, second L4 M6 review): the single-use
+ * guarantee above (steps 1.5/2.5) is tracked in `#consumedChallengeNonces`
+ * — an in-memory field on ONE `Supplier` INSTANCE, not anything shared or
+ * durable. That is deliberate for this milestone (`Supplier` is
+ * documented, here and in that field's own comment, as "the stateful,
+ * long-lived object for one real negotiation session"), but it is only
+ * as strong as the deployment's own discipline about instance lifetime:
+ * a `Supplier` reused across the whole session sees every nonce it has
+ * ever issued and can genuinely refuse a replay. A STATELESS server that
+ * constructs a fresh `Supplier` per HTTP request, by contrast, would
+ * silently defeat single-use entirely — every request gets a brand-new,
+ * empty `#consumedChallengeNonces`, so the exact same (challenge,
+ * presentation) pair verifies again on every "fresh" instance, with no
+ * error, no warning, nothing to notice until it's exploited. A real
+ * production deployment that cannot pin one `Supplier` instance to one
+ * session for its whole lifetime (for example: a horizontally-scaled or
+ * per-request-instantiated backend) needs single-use tracked in shared
+ * storage instead — e.g. a keyed store (Redis, a database table, ...)
+ * that every process/request consults, keyed by nonce, with the same
+ * "consume only after `verifyPossession` succeeds" ordering as FIX B
+ * below and its own TTL-based eviction mirroring `#pruneExpiredNonces`.
+ * That storage is out of scope here — this module only documents the
+ * requirement, deliberately does not build it.
  */
 import { createChallenge, encodeDidKey, verifyPossession, type Challenge, type CreateChallengeOptions, type Did } from "../identity/index.js";
 import { evaluatePolicyRequest } from "../policy/index.js";
