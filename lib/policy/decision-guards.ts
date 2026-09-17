@@ -38,6 +38,34 @@
  * absent — `null` for `authority`, filtered out of `history` — never as
  * its own distinct `RefusalKind`, and never by throwing. See `engine.ts`'s
  * `GATE_AUTHORITY_REQUIRED` refusal and its module comment.
+ *
+ * ## FIX 5(a) (L4 M5 RE-verification, non-blocking follow-up): a
+ * throwing property read is malformed input too
+ *
+ * The checks below were themselves written as ordinary property
+ * access (`value["accepted"]`, `credential["credentialSubject"]`, …),
+ * on the reasoning that `authority`/`history` are JSON — and
+ * `JSON.parse` cannot produce a getter, a `Proxy`, or any other
+ * accessor that could make a plain property READ throw. That reasoning
+ * is correct for a value that actually crossed a JSON boundary, but
+ * this module's whole point is that nothing downstream can assume that
+ * happened: an ADVERSARIAL IN-PROCESS CALLER (never a JSON parser) can
+ * still construct an object with a throwing getter, or a `Proxy` whose
+ * `get`/`ownKeys`/`getOwnPropertyDescriptor` traps throw, and hand it
+ * to `evaluatePolicyRequest` directly. The re-verification judged this
+ * non-blocking (exactly because it requires an in-process caller, not a
+ * value that merely crossed JSON), but the fix is the same "never
+ * throw for untrusted input" posture this whole module already
+ * promises, just one property-read layer down. `isWellFormedAuthorityTrustDecision`/
+ * `isWellFormedHistoryTrustDecision` now each wrap their entire body in
+ * a `try`/`catch` that treats ANY thrown error — at any depth, own
+ * property or inherited, from `value` itself or from a nested
+ * `credential`/`credentialSubject`/`revocation`/`issuerTrust` object —
+ * as "not well-formed", the same fail-closed outcome an ordinary
+ * shape mismatch already produces. `sanitizeHistoryInput` additionally
+ * guards its OWN array walk (`history.length`, `history[i]`) the same
+ * way, since a `Proxy` wrapping a real array can make even INDEXING
+ * into it throw, before the per-entry predicate is ever called.
  */
 import type { AuthorityCredential, HistoryAttestation } from "../credentials/index.js";
 import type { HistoryTrustDecision, TrustDecision } from "../trust/index.js";
@@ -102,8 +130,20 @@ function isWellFormedAcceptedShape(value: Record<string, unknown>, isWellFormedS
  * `TrustDecision<AuthorityCredential>`. Every branch mirrors one arm of
  * `engine.ts`'s own gate logic, so that if THIS returns `true`, none of
  * that logic's property accesses can throw.
+ *
+ * The entire body runs inside a `try`/`catch` (FIX 5(a)) — see this
+ * module's own comment on why a plain property read here is not
+ * guaranteed safe just because `authority` is "supposed to be" JSON.
  */
 export function isWellFormedAuthorityTrustDecision(value: unknown): value is TrustDecision<AuthorityCredential> {
+  try {
+    return isWellFormedAuthorityTrustDecisionUnguarded(value);
+  } catch {
+    return false;
+  }
+}
+
+function isWellFormedAuthorityTrustDecisionUnguarded(value: unknown): value is TrustDecision<AuthorityCredential> {
   if (!isPlainObject(value)) return false;
   const accepted = value["accepted"];
 
@@ -143,8 +183,21 @@ export function isWellFormedAuthorityTrustDecision(value: unknown): value is Tru
  * loosely: `history-constraints.ts` skips any `!decision.accepted` entry
  * outright (never dereferences its nested fields), so this only needs to
  * reject obvious garbage wearing an `accepted: false` costume.
+ *
+ * The entire body runs inside a `try`/`catch` (FIX 5(a)) — same
+ * reasoning as `isWellFormedAuthorityTrustDecision` above: this predicate
+ * is also called from `sanitizeHistoryInput`'s array walk, where one
+ * hostile entry must never take down the whole `history` array.
  */
 export function isWellFormedHistoryTrustDecision(value: unknown): value is HistoryTrustDecision {
+  try {
+    return isWellFormedHistoryTrustDecisionUnguarded(value);
+  } catch {
+    return false;
+  }
+}
+
+function isWellFormedHistoryTrustDecisionUnguarded(value: unknown): value is HistoryTrustDecision {
   if (!isPlainObject(value)) return false;
   const accepted = value["accepted"];
 
@@ -180,10 +233,21 @@ export function checkAuthorityInput(authority: unknown): AuthorityInputCheck {
     return { kind: "well-formed", decision: authority };
   }
   if (isPlainObject(authority)) {
-    return {
-      kind: "malformed",
-      detail: `does not match any TrustDecision variant (accepted=${JSON.stringify(authority["accepted"])}, stage=${JSON.stringify(authority["stage"])})`,
-    };
+    // FIX 5(a): reading `accepted`/`stage` back out for the detail
+    // message is itself a plain property read on untrusted `authority`
+    // — guarded the same way as the shape checks above, so a hostile
+    // getter/Proxy can make this diagnostic vaguer but never throw.
+    try {
+      return {
+        kind: "malformed",
+        detail: `does not match any TrustDecision variant (accepted=${JSON.stringify(authority["accepted"])}, stage=${JSON.stringify(authority["stage"])})`,
+      };
+    } catch {
+      return {
+        kind: "malformed",
+        detail: "does not match any TrustDecision variant, and its own \"accepted\"/\"stage\" fields could not be read safely (a throwing accessor)",
+      };
+    }
   }
   return { kind: "malformed", detail: `expected an object (or null), got ${Array.isArray(authority) ? "array" : typeof authority}` };
 }
@@ -202,5 +266,34 @@ export function sanitizeHistoryInput(history: unknown): readonly HistoryTrustDec
   if (!Array.isArray(history)) {
     return [];
   }
-  return history.filter(isWellFormedHistoryTrustDecision);
+  // FIX 5(a): guard the ARRAY WALK itself, not merely the per-entry
+  // predicate. `Array.isArray` returns `true` for a `Proxy` wrapping a
+  // real array too, and such a Proxy's `get` trap can make reading
+  // `.length` or an individual index throw — before
+  // `isWellFormedHistoryTrustDecision` (itself already guarded above)
+  // is ever called for that entry. A plain `history.filter(...)` would
+  // let that throw escape from `Array.prototype.filter`'s own internal
+  // indexing, taking down the whole call.
+  let length: number;
+  try {
+    length = history.length;
+  } catch {
+    return [];
+  }
+  const out: HistoryTrustDecision[] = [];
+  for (let index = 0; index < length; index++) {
+    let entry: unknown;
+    try {
+      entry = history[index];
+    } catch {
+      // This one index is unreadable — treated exactly like an entry
+      // that failed shape validation: dropped, never fatal to the rest
+      // of the walk.
+      continue;
+    }
+    if (isWellFormedHistoryTrustDecision(entry)) {
+      out.push(entry);
+    }
+  }
+  return out;
 }
