@@ -58,6 +58,18 @@
  * was built with, never for anything a counterparty presents; see that
  * module's own comment for why that distinction is deliberate.
  *
+ * DEPLOYMENT WARNING (third L4 M6 review): this module deliberately does
+ * NOT rate-limit failed proof-of-possession attempts. Consuming a nonce only
+ * after a signature verifies is what stops an attacker burning a legitimate
+ * agent's challenge — but it also means an unlimited number of garbage-signed
+ * presentations against a still-valid challenge are free. Each costs one
+ * Ed25519 verification and never reaches credential or policy evaluation, so
+ * the cost is bounded per attempt but unbounded in aggregate. A production
+ * deployment MUST add attempt throttling at its own transport or API layer.
+ * A specific policy (token bucket, per-IP, per-DID, exponential backoff) is an
+ * operational decision this framework-free library cannot make correctly for
+ * every caller, which is why it is documented rather than guessed at.
+ *
  * DEPLOYMENT WARNING (FIX D, second L4 M6 review): the single-use
  * guarantee above (steps 1.5/2.5) is tracked in `#consumedChallengeNonces`
  * — an in-memory field on ONE `Supplier` INSTANCE, not anything shared or
@@ -126,6 +138,13 @@ import type { NegotiationRequest, Presentation } from "./messages.js";
  *  changes real outcomes (a real vouch beyond the cap is dropped and
  *  never verified) — nothing in the suite had ever exercised more than
  *  a handful of vouches at once. */
+/**
+ * @internal Exported only so `supplier.test.ts` can size its fixtures off the
+ * real value instead of a hardcoded 16, which would let a raised cap silently
+ * invalidate the test. NOT part of this module's public API — deliberately
+ * absent from `index.ts`'s barrel, which is what every cross-module consumer
+ * imports through. Do not add it there.
+ */
 export const MAX_VOUCHES_PER_PRESENTATION = 16;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -186,6 +205,14 @@ function hasProofShape(proof: unknown): proof is { readonly did: unknown; readon
  * pin "this function itself still copies" is to call it directly and
  * inspect its return value's identity, not the decision it eventually
  * feeds into.
+ */
+/**
+ * @internal Exported only for direct assertion in `supplier.test.ts`: the
+ * root-layer guard in `lib/policy/safe-scope-read.ts` makes this layer's
+ * behaviour invisible end-to-end, so its defensive-copy property cannot be
+ * pinned through the engine — which is exactly why it had no coverage until
+ * a mutation test found that gutting it broke nothing. NOT public API;
+ * deliberately absent from `index.ts`'s barrel. Do not add it there.
  */
 export function sanitizeScope(rawScope: unknown): Record<string, unknown> {
   if (typeof rawScope !== "object" || rawScope === null) {
