@@ -13,7 +13,7 @@
  *   - nothing throws an unhandled error for a battery of malformed/
  *     hostile presentations and requests.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChallenge, encodeDidKey, generateKeyPair, provePossession, type Did } from "../identity/index.js";
 import { issueAuthorityCredential } from "../credentials/index.js";
 import { evaluateAuthorityCredentialTrust, issueVouch, TrustAnchorSet, type CredentialStatusEntry, type StatusListResolver } from "../trust/index.js";
@@ -906,3 +906,84 @@ describe("vouching, wired through the protocol for the first time (FIX 4, L4 M6 
     }
   });
 });
+
+// =========================================================================
+// SECOND L4 M6 REVIEW — FIX A (CRITICAL): the prune predicate must be the
+// exact complement of M1's `verifyPossession` expiry check. The previous
+// round's `#pruneExpiredNonces` evicted a bookkeeping entry when
+// `expiresAt <= now`, but `verifyPossession` only refuses when
+// `now > expiresAt` — a one-instant disagreement, at `now === expiresAt`,
+// during which pruning forgot a nonce proof-of-possession still treated
+// as live, reopening the exact replay window FIX 3 (first review) closed.
+// =========================================================================
+describe("prune/expiry boundary — the prune predicate is the exact complement of verifyPossession's expiry check (FIX A, second L4 M6 review, CRITICAL)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A Supplier that reads `Date.now()` (mockable via `vi.setSystemTime`)
+   *  on every call, instead of a fixed injected `now` — so these tests
+   *  can walk fake-timer time forward in exact, single-millisecond
+   *  steps up to and past a challenge's own `expiresAt`. */
+  function buildRealtimeSupplier(): { readonly fixture: ReturnType<typeof buildFourBeatFixture>; readonly supplier: Supplier } {
+    const fixture = buildFourBeatFixture(NOW);
+    const supplier = new Supplier({ policy: fixture.policy, anchors: fixture.anchors, statusListResolver: fixture.resolver });
+    return { fixture, supplier };
+  }
+
+  async function replayAfterPruneAt(offsetFromExpiry: number): Promise<{ readonly firstPermitted: boolean; readonly replayPermitted: boolean; readonly replayStage: string }> {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+
+    const { fixture, supplier } = buildRealtimeSupplier();
+    const challenge = supplier.issueChallenge({ ttlMs: 1_000 });
+    const proof = fixture.buyer.provePossession(challenge);
+    const presentation: Presentation = {
+      proof,
+      credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus },
+    };
+    const request: NegotiationRequest = { action: ACTION, scope: { amount: 1 } };
+
+    // Consume the challenge legitimately.
+    const first = await supplier.evaluatePresentation(challenge, presentation, request);
+
+    // Advance the clock to the requested instant relative to
+    // `expiresAt`, then trigger pruning via an UNRELATED
+    // `evaluatePresentation` call at that same instant — pruning runs
+    // at the top of every call, regardless of which challenge it names.
+    vi.setSystemTime(challenge.expiresAt + offsetFromExpiry);
+    const unrelatedChallenge = supplier.issueChallenge({ ttlMs: 60_000 });
+    const unrelatedProof = fixture.buyer.provePossession(unrelatedChallenge);
+    await supplier.evaluatePresentation(
+      unrelatedChallenge,
+      { proof: unrelatedProof, credentials: { authorityJwt: fixture.buyerAuthorityJwt, credentialStatus: fixture.buyerCredentialStatus } },
+      request,
+    );
+
+    // Replay the IDENTICAL already-used (challenge, presentation) pair.
+    const replay = await supplier.evaluatePresentation(challenge, presentation, request);
+    return { firstPermitted: first.permitted, replayPermitted: replay.permitted, replayStage: replay.stage };
+  }
+
+  it("one ms BEFORE expiry: the nonce is nowhere near pruned — replay refused at the single-use gate (sanity baseline)", async () => {
+    const result = await replayAfterPruneAt(-1);
+    expect(result.firstPermitted).toBe(true);
+    expect(result.replayPermitted).toBe(false);
+    expect(result.replayStage).toBe("proof-of-possession");
+  });
+
+  it("EXACTLY at expiry (now === expiresAt): still refused — the regression test that matters. verifyPossession would still ACCEPT a fresh proof at this exact instant (now > expiresAt is false), so pruning must not have forgotten this nonce, and the replay must not be silently permitted", async () => {
+    const result = await replayAfterPruneAt(0);
+    expect(result.firstPermitted).toBe(true);
+    expect(result.replayPermitted).toBe(false);
+    expect(result.replayStage).toBe("proof-of-possession");
+  });
+
+  it("one ms AFTER expiry: refused regardless — even if pruning DID drop the bookkeeping entry here, verifyPossession's own ChallengeExpiredError backstops it", async () => {
+    const result = await replayAfterPruneAt(1);
+    expect(result.firstPermitted).toBe(true);
+    expect(result.replayPermitted).toBe(false);
+    expect(result.replayStage).toBe("proof-of-possession");
+  });
+});
+

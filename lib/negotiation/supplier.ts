@@ -238,13 +238,15 @@ export class Supplier {
    * challenge may be answered at most once" is actually enforced.
    *
    * Bounded memory: `#pruneExpiredNonces` (called at the top of every
-   * `evaluatePresentation`) drops every entry whose recorded
-   * `expiresAt` is at or before the CURRENT call's `now` — a consumed
-   * nonce is remembered only for as long as its own challenge's TTL
-   * could still matter, never indefinitely. Nothing is lost by pruning
-   * a nonce the instant it can no longer be replayed anyway: a replay
-   * of an EXPIRED challenge is refused regardless, by
-   * `verifyPossession`'s own `ChallengeExpiredError` check.
+   * `evaluatePresentation`) drops every entry this session's own
+   * `verifyPossession` (M1, frozen) would ALREADY refuse to accept a
+   * fresh proof against — see that method's own comment for exactly why
+   * the prune predicate is written as M1's complement, never restated
+   * as its own constant. Nothing is lost by pruning on that boundary:
+   * a nonce still inside it can still be legitimately replayed-checked
+   * (single-use must still catch it), and a nonce past it is refused
+   * regardless by `verifyPossession`'s own `ChallengeExpiredError`
+   * check, so dropping the bookkeeping entry changes nothing observable.
    */
   readonly #consumedChallengeNonces = new Map<string, number>();
 
@@ -252,11 +254,37 @@ export class Supplier {
     this.#options = options;
   }
 
-  /** Drop every consumed-nonce bookkeeping entry that cannot possibly
-   *  matter anymore — see `#consumedChallengeNonces`'s own comment. */
+  /**
+   * Drop every consumed-nonce bookkeeping entry that cannot possibly
+   * matter anymore — see `#consumedChallengeNonces`'s own comment.
+   *
+   * SECOND L4 M6 REVIEW (FIX A, CRITICAL): this predicate must stay the
+   * exact logical complement of M1's `verifyPossession` expiry check
+   * (`lib/identity/challenge.ts`: `if (now > proof.challenge.expiresAt)
+   * throw ChallengeExpiredError`) — never a value independently derived
+   * from `expiresAt`. `verifyPossession` is frozen for this milestone
+   * and is the sole authority on "is this challenge still acceptable";
+   * this Supplier only remembers nonces, it does not get its own vote.
+   * M1 refuses when `now > expiresAt`, i.e. it still ACCEPTS at the
+   * boundary `now === expiresAt`. So this must evict only when
+   * `now > expiresAt` too (`expiresAt < now`) — an entry sitting exactly
+   * on the boundary is one M1 would still accept a fresh proof against,
+   * so pruning it here would let single-use bookkeeping forget a nonce
+   * proof-of-possession still considers live, reopening the exact replay
+   * window FIX 3 (first L4 M6 review) existed to close. The previous
+   * version of this line read `expiresAt <= now` — off by the single
+   * instant `now === expiresAt` — which is precisely the regression
+   * `supplier.test.ts`'s "prune/expiry boundary" block pins.
+   *
+   * A future change to EITHER this line or `verifyPossession`'s own
+   * expiry check must keep them exact complements of one another
+   * (`<=` here iff `>` there, or vice versa) — whichever direction
+   * changes, re-derive this one from it rather than editing them
+   * independently, or this same one-instant replay window reopens.
+   */
   #pruneExpiredNonces(now: number): void {
     for (const [nonce, expiresAt] of this.#consumedChallengeNonces) {
-      if (expiresAt <= now) {
+      if (expiresAt < now) {
         this.#consumedChallengeNonces.delete(nonce);
       }
     }
