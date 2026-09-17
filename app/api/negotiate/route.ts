@@ -50,6 +50,22 @@ function isAttackKind(value: unknown): value is AttackKind {
   return typeof value === "string" && (ATTACK_KINDS as readonly string[]).includes(value);
 }
 
+/** A JSON object as opposed to an array, `null`, or a primitive.
+ *  `typeof value === "object" && value !== null` alone is not enough:
+ *  arrays are also `typeof "object"` and would otherwise slip past this
+ *  guard and reach the `amount`/`attack` lookups below, which only
+ *  happen to reject them indirectly (the fields they read are absent on
+ *  an array, so `amount` ends up `NaN`). Reject the wrong shape here,
+ *  explicitly, with the same structured error the other invalid bodies
+ *  get — do not rely on that fallthrough. A key literally named
+ *  `__proto__` is not special-cased and needs none: `JSON.parse` (which
+ *  `request.json()` uses) always creates it as an ordinary own
+ *  property, never as the object's actual prototype, so it is a plain
+ *  object like any other here. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export async function POST(request: Request): Promise<NextResponse> {
   let body: unknown;
   try {
@@ -58,17 +74,17 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "request body must be valid JSON" }, { status: 400 });
   }
 
-  if (typeof body !== "object" || body === null) {
+  if (!isPlainObject(body)) {
     return NextResponse.json({ error: "request body must be a JSON object" }, { status: 400 });
   }
 
-  const rawAmount = (body as Record<string, unknown>)["amount"];
+  const rawAmount = body["amount"];
   const amount = typeof rawAmount === "number" ? rawAmount : Number(rawAmount);
   if (!Number.isFinite(amount)) {
     return NextResponse.json({ error: '"amount" must be a finite number' }, { status: 400 });
   }
 
-  const rawAttack = (body as Record<string, unknown>)["attack"];
+  const rawAttack = body["attack"];
   const attack: AttackKind = isAttackKind(rawAttack) ? rawAttack : "none";
 
   const result = await runCustomNegotiation({ amount, attack });
