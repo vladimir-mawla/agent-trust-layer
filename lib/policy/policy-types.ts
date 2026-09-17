@@ -128,6 +128,16 @@ export type PolicyRule = ActionScopeRule | HistoryNarrowRule;
  * `lib/trust/trust-decision.ts`, which names this exact gap as "M5's
  * problem").
  *
+ * Scope, precisely: this gate governs the AUTHORITY credential only —
+ * `engine.ts`'s `GATE_REVOCATION_UNCHECKED` never consults it for a
+ * `HistoryTrustDecision`, and `history-constraints.ts` narrows a ceiling
+ * identically whether or not a history attestation's own revocation was
+ * checked. That is deliberate, not an oversight: see
+ * `history-constraints.ts`'s module comment (FINDING 6, L4 M5 review) for
+ * why extending this gate to history would make the engine MORE
+ * permissive, not more cautious — backwards for a tighten-never-loosen
+ * design.
+ *
  * This is a REQUIRED field of `Policy` (see below), not an optional flag
  * on the evaluation call, and not a boolean. Three deliberate choices,
  * each closing a way M4's own bypass (an omitted, forgettable argument)

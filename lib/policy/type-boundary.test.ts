@@ -151,6 +151,24 @@ describe("runtime: history cannot widen an envelope", () => {
     expect(bound).not.toBeNull();
     expect(bound?.value).toBe(500);
     expect(bound?.source.kind).toBe("authority-credential");
+
+    // FINDING 2 (L4 M5 review): the assertions above alone are a weak
+    // proof of "tighten, never loosen" — they only ever exercise the case
+    // where the credential's own scope (pushed FIRST into
+    // `computeFieldBound`'s internal `candidates` array) already happens
+    // to be the tightest value, so a broken combinator that just
+    // returned the first candidate pushed (`candidates[0]`) — discarding
+    // the tightest-bound logic ENTIRELY — would still pass every
+    // assertion above. Complete the proof here, in the SAME dedicated
+    // test, with a rule that is genuinely tighter than the credential's
+    // 500: history (pushed LAST) must actually win.
+    const genuinelyNarrowingRule = { ...generousRule, id: "R-genuinely-narrower", narrowedMax: 50 };
+    const genuinelyTriggered = computeHistoryConstraints([genuinelyNarrowingRule], "purchase", [historyDecision]);
+    expect(genuinelyTriggered).toHaveLength(1);
+    const narrowedBound = computeFieldBound("maxAmount", envelope, actionRule, genuinelyTriggered);
+    expect(narrowedBound).not.toBeNull();
+    expect(narrowedBound?.value).toBe(50); // NOT 500 — history genuinely narrowed here.
+    expect(narrowedBound?.source.kind).toBe("history-constraint");
   });
 
   it("end to end: a request for more than the credential's own scope is refused even with a glowing, favourable history attached, and even with no authority credential at all", async () => {

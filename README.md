@@ -1,5 +1,7 @@
 # agent-trust-layer
 
+[![CI](https://github.com/vladimir-mawla/agent-trust-layer/actions/workflows/ci.yml/badge.svg)](https://github.com/vladimir-mawla/agent-trust-layer/actions/workflows/ci.yml)
+
 A trust layer for AI agents: how one agent decides whether to act on another agent's request.
 
 > Trust is not a number. It is a decision — about a specific counterparty, for a specific
