@@ -92,6 +92,70 @@ describe("validatePolicy — contradictory rules", () => {
       }),
     ).toThrow(PolicyContradictionError);
   });
+
+  // FINDING 7 (L4 M5 review): a `ruleId` shared across rule KINDS — e.g.
+  // an "action-scope" rule and an unrelated "history-narrow" rule both
+  // named "R-shared" — used to slip through unnoticed entirely (the
+  // duplicate-id check only ever compared action-scope rules governing
+  // the SAME action). Any `Explanation` that later cites "R-shared"
+  // would be ambiguous about which of the two rules actually fired.
+  it("throws PolicyContradictionError when an action-scope rule and a history-narrow rule share the same ruleId", () => {
+    expect(() =>
+      validatePolicy({
+        ...VALID_POLICY,
+        rules: [
+          { kind: ACTION_SCOPE_RULE_KIND, id: "R-shared", description: "purchase ceiling", action: "purchase", maxScope: { maxAmount: 500 } },
+          {
+            kind: HISTORY_NARROW_RULE_KIND,
+            id: "R-shared",
+            description: "narrows on disputes",
+            action: "purchase",
+            observationType: "disputes-observed",
+            metric: "disputeCount",
+            operator: "gte",
+            threshold: 3,
+            scopeField: "maxAmount",
+            narrowedMax: 100,
+          },
+        ],
+      }),
+    ).toThrow(PolicyContradictionError);
+  });
+
+  it("throws PolicyContradictionError when two history-narrow rules for DIFFERENT actions share the same ruleId", () => {
+    expect(() =>
+      validatePolicy({
+        ...VALID_POLICY,
+        rules: [
+          { kind: ACTION_SCOPE_RULE_KIND, id: "R1", description: "purchase ceiling", action: "purchase", maxScope: { maxAmount: 500 } },
+          {
+            kind: HISTORY_NARROW_RULE_KIND,
+            id: "R-dup",
+            description: "narrows purchase on disputes",
+            action: "purchase",
+            observationType: "disputes-observed",
+            metric: "disputeCount",
+            operator: "gte",
+            threshold: 3,
+            scopeField: "maxAmount",
+            narrowedMax: 100,
+          },
+          {
+            kind: HISTORY_NARROW_RULE_KIND,
+            id: "R-dup",
+            description: "narrows a different action entirely",
+            action: "refund",
+            observationType: "disputes-observed",
+            metric: "disputeCount",
+            operator: "gte",
+            threshold: 3,
+            scopeField: "maxAmount",
+            narrowedMax: 100,
+          },
+        ],
+      }),
+    ).toThrow(PolicyContradictionError);
+  });
 });
 
 describe("validatePolicy — unknown rule type", () => {

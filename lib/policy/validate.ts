@@ -184,8 +184,25 @@ export function validatePolicy(input: unknown): Policy {
 
   const rules: PolicyRule[] = [];
   const actionScopeRuleIdByAction = new Map<string, string>();
+  // FINDING 7 (L4 M5 review): a `ruleId` shared between two rules — even
+  // of DIFFERENT kinds, e.g. an `action-scope` rule and a
+  // `history-narrow` rule both using `id: "R-1"` — makes any future
+  // `Explanation` citing that id genuinely ambiguous about which rule
+  // actually fired (`Explanation.rule.ruleId` is the only stable
+  // identifier a human/consumer has to go on). Checked across the WHOLE
+  // policy, independent of the existing (narrower)
+  // same-action/same-kind check below, which is about two rules
+  // matching the same action, not about id collisions specifically.
+  const seenRuleIdKinds = new Map<string, PolicyRule["kind"]>();
   for (let index = 0; index < rulesRaw.length; index++) {
     const rule = validateRule(rulesRaw[index], index);
+    const existingKind = seenRuleIdKinds.get(rule.id);
+    if (existingKind !== undefined) {
+      throw new PolicyContradictionError(
+        `rule id "${rule.id}" is used by more than one rule (a "${existingKind}" rule and a "${rule.kind}" rule) — an explanation citing this id would be ambiguous about which rule actually fired`,
+      );
+    }
+    seenRuleIdKinds.set(rule.id, rule.kind);
     if (rule.kind === ACTION_SCOPE_RULE_KIND) {
       const existingRuleId = actionScopeRuleIdByAction.get(rule.action);
       if (existingRuleId !== undefined) {
