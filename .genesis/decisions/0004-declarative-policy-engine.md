@@ -75,6 +75,20 @@ envelope" impossible rather than merely discouraged:
      `type-boundary.test.ts` exercises this at runtime with a deliberately-oversized `narrowedMax`
      (10,000,000 against a credential's own scope of 500) and asserts the effective bound is
      unchanged.
+   - **Arithmetic, corrected:** the combinator now uses the REAL, literal
+     `Math.min` (`Math.min(...candidates.map(c => c.value))`), not the
+     hand-rolled `<`-comparison `reduce` this ADR originally described.
+     They are not the same function: real `Math.min` poisons to `NaN`
+     unconditionally the instant any candidate is non-finite, while the
+     `reduce` only poisoned when the non-finite candidate happened to be
+     FIRST — for any other position it silently kept a finite-but-not-
+     actually-tighter candidate instead, discarding a genuinely
+     non-finite bound rather than surfacing it. `engine.ts` now also
+     explicitly refuses (never permits) when `computeFieldBound`'s
+     returned bound, or the request's own value, is not finite — a
+     `NaN`/`Infinity` ceiling compared with `>` would otherwise read as
+     "never over scope", i.e. an unconditional permit. See the L4 M5
+     review amendment below (FINDING 3 / FINDING 8).
 
 **3. The mandatory revocation gate is a required, justified field of the POLICY, not an optional
 call-site flag.** `Policy.revocationHandling: RevocationRequirement` is REQUIRED — `validatePolicy`
@@ -117,6 +131,21 @@ change any accept/refuse outcome, and tested against a genuinely fabricated sign
 future change to that message fails this module's own test rather than silently losing the
 distinction again.
 
+**6. An omitted-but-bounded scope field is refused, not treated as zero
+usage.** `evaluatePolicyRequest` evaluates the UNION of fields named by
+the authority credential's own scope, the matching `ActionScopeRule`'s
+`maxScope`, and any triggered `HistoryNarrowRule`'s `scopeField` — never
+merely the fields the incoming `PolicyRequest.scope` happens to mention.
+A field this engine knows a bound for, that the request does not supply
+a numeric value for, is treated as an UNBOUNDED, unverifiable request for
+that dimension and refused (`over-scope`/`history-constraint`, matching
+whichever source names the tightest bound) — never silently read as "0 /
+not requested, therefore fine". The alternative reading ("omitted means
+zero, permit") was rejected because it is exactly the shape of a bypass:
+a counterparty could omit precisely the field it would be limited on and
+receive an unconditional permit without the credential's own ceiling ever
+being consulted. See the L4 M5 review amendment below (FINDING 4).
+
 ## Consequences
 
 - Positive: a policy is printable, diffable, and predictable by reading — the exact property the
@@ -137,6 +166,59 @@ distinction again.
   `TrustDecision`/`HistoryTrustDecision`, never a raw claim) and `every-decision-is-explainable`
   (this ADR's point 4) for M5's own slice, plus the concrete enforcement of ADR 0002's "history may
   tighten but never loosen" as actual logic rather than merely a type split.
+
+## Amendment — L4 VERIFY review findings (2026-09-17, `m5-policy-fixes`)
+
+An independent L4 VERIFY pass REJECTED the M5 build this ADR originally
+described, on six findings. All six are fixed; this amendment records
+what changed so the ADR's own claims stay true of the code:
+
+- **FINDING 1 (critical):** `evaluatePolicyRequest`'s `authority`/
+  `history` parameters are typed as trusted `TrustDecision`/
+  `HistoryTrustDecision` values, but — exactly as this ADR's own
+  "claims arrive as JSON, not TypeScript" framing implies — a value
+  crossing a real serialization boundary is not bound by that type. Before
+  this fix, anything other than literal `null` for `authority` (or any
+  malformed `history` entry once a `history-narrow` rule existed to
+  iterate into it) threw a bare, unhandled `TypeError` — the same class
+  of defect ADR history already rejected once for M3. Fixed with
+  `lib/policy/decision-guards.ts`: a runtime shape check, at the engine
+  boundary, that treats anything which isn't a well-formed decision
+  exactly as if it were absent (`null` for authority, filtered out of
+  `history`) — fail closed, always a structured `PolicyDecision`, never a
+  throw.
+- **FINDING 2 (high):** the tighten-never-loosen combinator
+  (`computeFieldBound`) was validated by coincidence — mutating it to
+  `return candidates[0]` broke only 1 of 196 tests, and not the dedicated
+  runtime proof in `type-boundary.test.ts` (whose fixture happened to
+  have the first-pushed candidate already be the tightest). Fixed by
+  adding `lib/policy/permitted-scope.test.ts` (fixtures where each of the
+  three bound sources is tightest in a non-first position) and
+  strengthening the dedicated proof test itself with a genuinely-tighter
+  case. The same mutation now breaks 9 of 225 tests, including that
+  proof test.
+- **FINDING 3 (high):** see decision 2's "Arithmetic, corrected" bullet
+  above and decision 6 above.
+- **FINDING 4 (high):** see decision 6 above.
+- **FINDING 5 (medium):** `credential-verification-failed` — one of the
+  nine `RefusalKind`s — had zero test coverage despite being reachable.
+  Added a test reaching it through the real `evaluateAuthorityCredentialTrust`
+  path with a malformed JWT.
+- **FINDING 6 (medium):** the mandatory revocation gate
+  (`GATE_REVOCATION_UNCHECKED`) covers the authority credential only —
+  `computeHistoryConstraints` never inspects a `HistoryTrustDecision`'s
+  `revocation.outcome`, so an unchecked-revocation history attestation
+  narrows a ceiling exactly like a checked-and-clean one. Reviewed
+  deliberately and kept as-is, now documented in `history-constraints.ts`
+  and `policy-types.ts`: because history can only ever narrow, the worst
+  an unverifiable history observation can do is cause an unearned
+  REFUSAL (a false negative), never an unearned permit (a false
+  positive) — extending the mandatory-checked gate to history would make
+  the engine MORE permissive whenever a history attestation's revocation
+  happens not to have been checked, which is backwards for a
+  tighten-never-loosen design. A regression test
+  (`history-constraints.test.ts`) makes this explicit rather than merely
+  documented.
 
 ## Alternatives rejected
 

@@ -23,6 +23,40 @@
  * separately-verified authority credential, it just contributes no
  * constraint — the same "one bad candidate doesn't sink the whole
  * evaluation" posture `lib/trust/anchors.ts` documents for vouches.
+ *
+ * ## FINDING 6 (L4 M5 review): the mandatory revocation gate deliberately
+ * does NOT apply here
+ *
+ * `engine.ts`'s `GATE_REVOCATION_UNCHECKED` gate — refusing an authority
+ * credential whose `revocation.outcome === "not-checked"`, unless
+ * `policy.revocationHandling.requireChecked === false` — is checked ONLY
+ * for the `authority` decision, never for a `HistoryTrustDecision`: an
+ * accepted history attestation whose revocation was never checked
+ * narrows a ceiling exactly like one that was checked and clean (this
+ * function does not even look at `decision.revocation` at all).
+ *
+ * This is a deliberate choice, not an oversight, and it is NOT the same
+ * risk as the authority gap `GATE_REVOCATION_UNCHECKED` closes. The
+ * authority gate exists because an unchecked-but-actually-revoked
+ * authority credential being treated as clean would GRANT something
+ * that should have been refused — a real widening of what's permitted.
+ * History can only ever narrow (`permitted-scope.ts`'s `Math.min`, and
+ * `HistoryNarrowRule` has no field that could express a grant — see
+ * `policy-types.ts`): the worst an unchecked-and-actually-revoked
+ * history attestation could do is contribute a narrowing that, in
+ * hindsight, shouldn't have been trusted — REFUSING a request that a
+ * fully-vetted history would have permitted. That is a false negative
+ * (a request wrongly narrowed/refused), never a false positive (nothing
+ * is ever granted because of it) — the opposite of the failure mode
+ * `GATE_REVOCATION_UNCHECKED` exists to prevent. Extending that gate to
+ * history would trade a real safety property (fail-closed: an
+ * unverifiable narrowing still narrows) for a cosmetic symmetry with the
+ * authority path, at the cost of becoming MORE permissive whenever a
+ * history attestation's revocation happens not to have been checked —
+ * exactly backwards for an engine whose whole point is tighten-never-
+ * loosen. See `history-constraints.test.ts` for a test asserting this
+ * explicitly (an unchecked-revocation history attestation narrows a
+ * ceiling identically to a checked-and-clean one).
  */
 import type { Did } from "../identity/index.js";
 import type { HistoryTrustDecision } from "../trust/index.js";
