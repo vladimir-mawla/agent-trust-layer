@@ -62,6 +62,7 @@ import { decodeDidKey, type Did } from "../identity/index.js";
 import { VC_CONTEXT_V2, parseCompactJws, verificationMethodId } from "../credentials/index.js";
 import { createEmptyEncodedList, decodeEncodedList, getStatusBit, withBitSet } from "./bitstring.js";
 import {
+  StatusListIssuerMismatchError,
   StatusListIssuerUnresolvableError,
   StatusListMalformedError,
   StatusListPurposeMismatchError,
@@ -306,18 +307,56 @@ function validateStatusListCredential(payload: unknown): {
 
 /**
  * The one genuinely networked check in this project. Resolves, verifies
- * (signature AND freshness), and consults a Bitstring Status List for a
- * single credential's status. Fails closed for every failure mode:
- * unavailable, unverifiable, stale, purpose-mismatched, or malformed all
- * become `{ outcome: "indeterminate" }`, and an explicit "1" bit becomes
- * `{ outcome: "revoked" }` — both refuse a credential; only "active"
- * (a verified, fresh, correctly-purposed list with the bit unset)
- * accepts one. See the module comment for why this is async and nothing
- * else in `lib/trust` (or `lib/` at all) needs to be.
+ * (signature, ISSUER, AND freshness), and consults a Bitstring Status
+ * List for a single credential's status. Fails closed for every failure
+ * mode: unavailable, unverifiable, wrong issuer, stale, purpose-
+ * mismatched, or malformed all become `{ outcome: "indeterminate" }`,
+ * and an explicit "1" bit becomes `{ outcome: "revoked" }` — both refuse
+ * a credential; only "active" (a verified, fresh, correctly-issued,
+ * correctly-purposed list with the bit unset) accepts one. See the
+ * module comment for why this is async and nothing else in `lib/trust`
+ * (or `lib/` at all) needs to be.
+ *
+ * `expectedIssuer` is REQUIRED, not optional, and deliberately so. Before
+ * this parameter existed, this function verified only that the resolved
+ * status list credential was internally self-consistent (its `issuer`
+ * claim matched the key that actually signed it) — it never checked that
+ * THAT issuer was the right one to be speaking for THIS credential at
+ * all. That gap meant anyone who could influence what `resolver` returns
+ * for a given URL (and ADR 0003's own threat model already names the
+ * status-list host as only semi-trusted) could substitute a "clean"
+ * status list signed by an unrelated, throwaway keypair and have it
+ * accepted — no compromise of the real issuer's key required. Making
+ * `expectedIssuer` a required parameter means that bug class cannot
+ * recur by a caller merely forgetting an optional argument: the compiler
+ * refuses to build any call site that omits it, rather than relying on a
+ * reviewer to notice the omission the way the original bug went
+ * unnoticed. `trust-decision.ts` passes the credential's own
+ * `verification.verifiedIssuer` — M3's cryptographically VERIFIED
+ * issuer, never a claimed/unverified field — as this argument.
+ *
+ * Design note on the match rule itself: this function requires an EXACT
+ * match between `expectedIssuer` and the resolved list's `issuer`. A real
+ * deployment might want an issuer to delegate status-list HOSTING to a
+ * separate, dedicated identity (so a compromised hosting key can't be
+ * used to forge authority credentials, say) — exact match forecloses
+ * that without an explicit design for delegation (e.g. an issuer signing
+ * a "publisher X may speak for my status lists" statement, verified here
+ * the same way a `Vouch` is). Exact match is chosen as the default
+ * because it is the simplest rule that closes the bypass above with zero
+ * new trust machinery, and because this project has no delegation
+ * primitive for status-list hosting today — inventing one silently,
+ * inside this one check, would be exactly the kind of undocumented trust
+ * expansion this project's whole design argues against elsewhere. If a
+ * caller needs delegation, the honest shape is: the caller resolves (and
+ * itself verifies) which publisher DID an issuer has delegated to, and
+ * passes THAT resolved DID as `expectedIssuer` explicitly — an explicit
+ * act by the caller, never a silent fallback inside this function.
  */
 export async function checkRevocation(
   entry: CredentialStatusEntry,
   resolver: StatusListResolver,
+  expectedIssuer: Did,
   options: CheckRevocationOptions = {},
 ): Promise<RevocationStatus> {
   const now = options.now ?? Date.now();
@@ -398,6 +437,17 @@ export async function checkRevocation(
   // credentials, applied here to the status list credential itself.
   if (validated.issuer !== candidateIssuer) {
     const err = new StatusListMalformedError(`credential claims issuer ${validated.issuer} but was signed by ${candidateIssuer}`);
+    return { outcome: "indeterminate", reason: err.message, cause: err };
+  }
+
+  // The status list is internally self-consistent (checked immediately
+  // above) AND was issued by the identity the caller actually expects —
+  // see this function's module-comment note on `expectedIssuer` for why
+  // this second, independent check is the whole point: without it, a
+  // status list signed by ANY self-consistent key (not just the real
+  // issuer's) passes every check above.
+  if (validated.issuer !== expectedIssuer) {
+    const err = new StatusListIssuerMismatchError(expectedIssuer, validated.issuer);
     return { outcome: "indeterminate", reason: err.message, cause: err };
   }
 

@@ -25,6 +25,7 @@ export type RevocationFailureKind =
   | "status-list-malformed"
   | "status-list-signature-invalid"
   | "status-list-issuer-unresolvable"
+  | "status-list-issuer-mismatch"
   | "status-list-stale"
   | "status-list-purpose-mismatch"
   | "bitstring-index-invalid";
@@ -72,6 +73,30 @@ export class StatusListSignatureInvalidError extends Error {
 
   constructor(options?: { cause?: unknown }) {
     super("Status list credential signature verification failed", options);
+  }
+}
+
+/**
+ * The status list credential is internally self-consistent (its own
+ * `issuer` claim matches the key that actually signed it — see
+ * `StatusListMalformedError`'s sibling check in `status-list.ts`) but was
+ * NOT issued by the identity the caller told `checkRevocation` to expect
+ * — see that function's now-required `expectedIssuer` parameter. This is
+ * precisely the vulnerability an L4 review found and required fixed: a
+ * status list signed by ANY key (a throwaway, attacker-controlled
+ * keypair included) previously passed every check as long as it was
+ * self-consistent, because nothing tied it back to the credential whose
+ * revocation it was supposed to speak for.
+ */
+export class StatusListIssuerMismatchError extends Error {
+  override readonly name = "StatusListIssuerMismatchError";
+  readonly kind: RevocationFailureKind = "status-list-issuer-mismatch";
+
+  constructor(
+    readonly expectedIssuer: string,
+    readonly actualIssuer: string,
+  ) {
+    super(`Status list credential is issued by ${actualIssuer}, but the caller expected ${expectedIssuer} — refusing to accept a status list from an unexpected issuer`);
   }
 }
 
@@ -147,6 +172,7 @@ export type RevocationError =
   | StatusListMalformedError
   | StatusListSignatureInvalidError
   | StatusListIssuerUnresolvableError
+  | StatusListIssuerMismatchError
   | StatusListStaleError
   | StatusListPurposeMismatchError
   | BitstringIndexError;

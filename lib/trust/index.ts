@@ -74,6 +74,7 @@ export {
   StatusListMalformedError,
   StatusListSignatureInvalidError,
   StatusListIssuerUnresolvableError,
+  StatusListIssuerMismatchError,
   StatusListStaleError,
   StatusListPurposeMismatchError,
   BitstringIndexError,

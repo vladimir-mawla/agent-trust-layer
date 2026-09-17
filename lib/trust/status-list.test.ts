@@ -65,6 +65,7 @@ describe("checkRevocation — happy path", () => {
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 5, statusListCredential: STATUS_LIST_URL },
       resolverFor(jwt),
+      issuer.did,
       { now: 0 },
     );
 
@@ -87,6 +88,7 @@ describe("revoked credential -> refused", () => {
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 5, statusListCredential: STATUS_LIST_URL },
       resolverFor(jwt),
+      issuer.did,
       { now: 0 },
     );
 
@@ -109,6 +111,7 @@ describe("valid credential, index NOT set in the bitstring -> accepted", () => {
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 5, statusListCredential: STATUS_LIST_URL },
       resolverFor(jwt),
+      issuer.did,
       { now: 0 },
     );
 
@@ -137,6 +140,7 @@ describe("status list with a broken signature -> refused (fail closed)", () => {
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
       resolverFor(forged),
+      issuer.did,
       { now: 0 },
     );
 
@@ -161,6 +165,7 @@ describe("status list too stale -> refused; exact boundary tested", () => {
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
       resolverFor(jwt),
+      issuer.did,
       { now: DEFAULT_MAX_STATUS_LIST_AGE_MS, maxStatusListAgeMs: DEFAULT_MAX_STATUS_LIST_AGE_MS },
     );
 
@@ -181,6 +186,7 @@ describe("status list too stale -> refused; exact boundary tested", () => {
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
       resolverFor(jwt),
+      issuer.did,
       { now: DEFAULT_MAX_STATUS_LIST_AGE_MS + 1, maxStatusListAgeMs: DEFAULT_MAX_STATUS_LIST_AGE_MS },
     );
 
@@ -192,6 +198,7 @@ describe("status list too stale -> refused; exact boundary tested", () => {
 
 describe("status list unavailable / resolver throws -> refused, no unhandled throw", () => {
   it("reports 'indeterminate' when the resolver rejects", async () => {
+    const issuer = makeIdentity();
     const failing: StatusListResolver = async () => {
       throw new Error("network is down");
     };
@@ -199,6 +206,7 @@ describe("status list unavailable / resolver throws -> refused, no unhandled thr
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
       failing,
+      issuer.did,
       { now: 0 },
     );
 
@@ -222,6 +230,7 @@ describe("statusPurpose mismatch", () => {
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
       resolverFor(jwt),
+      issuer.did,
       { now: 0 },
     );
 
@@ -238,6 +247,7 @@ describe("bitstring index out of range, negative, non-integer -> typed error, ne
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: -1, statusListCredential: STATUS_LIST_URL },
       resolverFor(jwt),
+      issuer.did,
       { now: 0 },
     );
     expect(result.outcome).toBe("indeterminate");
@@ -251,6 +261,7 @@ describe("bitstring index out of range, negative, non-integer -> typed error, ne
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 1.5, statusListCredential: STATUS_LIST_URL },
       resolverFor(jwt),
+      issuer.did,
       { now: 0 },
     );
     expect(result.outcome).toBe("indeterminate");
@@ -264,6 +275,7 @@ describe("bitstring index out of range, negative, non-integer -> typed error, ne
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 1_000_000, statusListCredential: STATUS_LIST_URL },
       resolverFor(jwt),
+      issuer.did,
       { now: 0 },
     );
     expect(result.outcome).toBe("indeterminate");
@@ -274,9 +286,11 @@ describe("bitstring index out of range, negative, non-integer -> typed error, ne
 
 describe("malformed/garbage status list VC -> typed error, never unhandled", () => {
   it("refuses a resolver result that isn't a JWS at all", async () => {
+    const issuer = makeIdentity();
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
       async () => "complete garbage, not a JWS",
+      issuer.did,
       { now: 0 },
     );
     expect(result.outcome).toBe("indeterminate");
@@ -291,6 +305,7 @@ describe("malformed/garbage status list VC -> typed error, never unhandled", () 
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
       resolverFor(forged),
+      issuer.did,
       { now: 0 },
     );
 
@@ -308,6 +323,7 @@ describe("malformed/garbage status list VC -> typed error, never unhandled", () 
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
       resolverFor(jwt),
+      issuer.did,
       { now: 0 },
     );
     expect(result.outcome).toBe("indeterminate");
@@ -330,6 +346,7 @@ describe("malformed/garbage status list VC -> typed error, never unhandled", () 
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
       resolverFor(jwt),
+      issuer.did,
       { now: 0 },
     );
     expect(result.outcome).toBe("indeterminate");
@@ -338,10 +355,12 @@ describe("malformed/garbage status list VC -> typed error, never unhandled", () 
   });
 
   it("refuses a resolver result that isn't even a string", async () => {
+    const issuer = makeIdentity();
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
       // @ts-expect-error deliberately violating StatusListResolver's contract to prove fail-closed handling
       async () => ({ not: "a string" }),
+      issuer.did,
       { now: 0 },
     );
     expect(result.outcome).toBe("indeterminate");
@@ -368,10 +387,74 @@ describe("issuer-identity mismatch on the status list credential itself", () => 
     const result = await checkRevocation(
       { type: "BitstringStatusListEntry", statusPurpose: "revocation", statusListIndex: 0, statusListCredential: STATUS_LIST_URL },
       resolverFor(forged),
+      acme.did,
       { now: 0 },
     );
     expect(result.outcome).toBe("indeterminate");
     if (result.outcome !== "indeterminate") throw new Error("expected indeterminate");
     expect(result.cause.kind).toBe("status-list-signature-invalid");
+  });
+});
+
+// ---------------------------------------------------------------------
+// FINDING 1 (CRITICAL) regression — L4 VERIFY rejected M4 because
+// `checkRevocation` checked only that the resolved status list was
+// INTERNALLY self-consistent (its own `issuer` claim matched whoever
+// actually signed it), never that it was issued by the credential's own
+// real issuer, or by any expected identity at all. That meant a resolver
+// which returned a "clean" status list signed by ANY throwaway keypair —
+// no compromise of the real issuer's key required — got the credential
+// accepted even when the REAL issuer had genuinely revoked it. Fixed by
+// making `expectedIssuer` a required parameter to `checkRevocation` and
+// refusing any resolved list whose issuer doesn't match it.
+// ---------------------------------------------------------------------
+describe("FINDING 1 — status list issuer must match the credential's own issuer (bypass regression)", () => {
+  const ENTRY = { type: "BitstringStatusListEntry" as const, statusPurpose: "revocation", statusListIndex: 3, statusListCredential: STATUS_LIST_URL };
+
+  it("sanity: the REAL issuer's genuinely-revoking status list is correctly refused", async () => {
+    const realIssuer = makeIdentity();
+    const revokedListJwt = issueStatusListCredential({
+      issuerPrivateKey: realIssuer.privateKey,
+      issuerDid: realIssuer.did,
+      statusPurpose: "revocation",
+      sizeBits: 128,
+      revokedIndices: [3],
+      now: 0,
+    });
+
+    const result = await checkRevocation(ENTRY, resolverFor(revokedListJwt), realIssuer.did, { now: 0 });
+
+    expect(result.outcome).toBe("revoked");
+  });
+
+  it("REFUSES an unrelated throwaway-keypair-signed 'clean' list swapped in for the same URL, naming the issuer mismatch", async () => {
+    const realIssuer = makeIdentity();
+    // A completely unrelated, attacker-controlled keypair -- not a
+    // compromise of realIssuer's key, just some other identity that can
+    // sign its own perfectly well-formed, perfectly self-consistent
+    // status list credential.
+    const throwaway = makeIdentity();
+
+    const cleanListFromThrowaway = issueStatusListCredential({
+      issuerPrivateKey: throwaway.privateKey,
+      issuerDid: throwaway.did,
+      statusPurpose: "revocation",
+      sizeBits: 128,
+      // deliberately no revokedIndices -- index 3 reads as unset/"clean"
+      now: 0,
+    });
+
+    // Same credentialStatus entry (same URL, same index) as the sanity
+    // check above -- only the RESOLVER's answer differs, exactly modeling
+    // a semi-trusted status-list host returning a different list than the
+    // real issuer published (ADR 0003's own threat model names the host
+    // as only semi-trusted).
+    const result = await checkRevocation(ENTRY, resolverFor(cleanListFromThrowaway), realIssuer.did, { now: 0 });
+
+    expect(result.outcome).toBe("indeterminate");
+    if (result.outcome !== "indeterminate") throw new Error("expected indeterminate");
+    expect(result.cause.kind).toBe("status-list-issuer-mismatch");
+    expect(result.reason).toContain(realIssuer.did);
+    expect(result.reason).toContain(throwaway.did);
   });
 });

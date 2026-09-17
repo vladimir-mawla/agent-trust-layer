@@ -46,7 +46,7 @@
  * for this milestone is empty, exceeding the M1-freeze gate's bar by
  * choice, not by luck.
  */
-import type { ProofOfPossession } from "../identity/index.js";
+import type { Did, ProofOfPossession } from "../identity/index.js";
 import type { AuthorityCredential, HistoryAttestation, VerificationFailure, VerificationResult, VerificationSuccess } from "../credentials/index.js";
 import { isVerified, verifyAuthorityCredential, verifyHistoryAttestation } from "../credentials/index.js";
 import { evaluateIssuerTrust, type EvaluateIssuerTrustOptions, type IssuerTrustResult, type TrustAnchorSet } from "./anchors.js";
@@ -115,13 +115,24 @@ interface RevocationInputs {
   readonly maxStatusListAgeMs?: number;
 }
 
+/**
+ * `expectedIssuer` is threaded through as its own required parameter
+ * (never folded into `RevocationInputs`, and never optional) so that
+ * every call site here is forced, by the compiler, to supply the
+ * credential's own M3-VERIFIED issuer — `verification.verifiedIssuer`,
+ * never a claimed/unverified field — as the identity `checkRevocation`
+ * requires the resolved status list to actually match. See
+ * `status-list.ts`'s `checkRevocation` module comment for why that
+ * parameter exists and is required there too.
+ */
 async function resolveRevocation(
   input: RevocationInputs,
+  expectedIssuer: Did,
 ): Promise<(RevocationStatus & { readonly outcome: "active" }) | RevocationNotChecked | (RevocationStatus & { readonly outcome: "revoked" | "indeterminate" })> {
   if (input.credentialStatus === undefined || input.statusListResolver === undefined) {
     return { outcome: "not-checked", reason: "no credentialStatus/statusListResolver was supplied for this evaluation" };
   }
-  const status = await checkRevocation(input.credentialStatus, input.statusListResolver, {
+  const status = await checkRevocation(input.credentialStatus, input.statusListResolver, expectedIssuer, {
     ...(input.now !== undefined ? { now: input.now } : {}),
     ...(input.maxStatusListAgeMs !== undefined ? { maxStatusListAgeMs: input.maxStatusListAgeMs } : {}),
   });
@@ -169,7 +180,12 @@ export async function evaluateAuthorityCredentialTrust(input: EvaluateAuthorityT
     };
   }
 
-  const revocation = await resolveRevocation(input);
+  // The status list must be issued by THIS credential's own verified
+  // issuer — `verification.verifiedIssuer` is M3's cryptographically
+  // checked value, never `input`'s unverified/claimed data. See
+  // `resolveRevocation`'s and `checkRevocation`'s comments for why this
+  // is a required argument, not an optional one a caller could forget.
+  const revocation = await resolveRevocation(input, verification.verifiedIssuer);
   if (revocation.outcome === "revoked" || revocation.outcome === "indeterminate") {
     return {
       accepted: false,
@@ -265,12 +281,18 @@ export async function evaluateHistoryAttestationTrust(input: EvaluateHistoryTrus
     };
   }
 
-  const revocation = await resolveRevocation({
-    ...(input.credentialStatus !== undefined ? { credentialStatus: input.credentialStatus } : {}),
-    ...(input.statusListResolver !== undefined ? { statusListResolver: input.statusListResolver } : {}),
-    ...(input.now !== undefined ? { now: input.now } : {}),
-    ...(input.maxStatusListAgeMs !== undefined ? { maxStatusListAgeMs: input.maxStatusListAgeMs } : {}),
-  });
+  // Same requirement as the authority-credential path above: the status
+  // list must match THIS attestation's own verified issuer, not a
+  // claimed one.
+  const revocation = await resolveRevocation(
+    {
+      ...(input.credentialStatus !== undefined ? { credentialStatus: input.credentialStatus } : {}),
+      ...(input.statusListResolver !== undefined ? { statusListResolver: input.statusListResolver } : {}),
+      ...(input.now !== undefined ? { now: input.now } : {}),
+      ...(input.maxStatusListAgeMs !== undefined ? { maxStatusListAgeMs: input.maxStatusListAgeMs } : {}),
+    },
+    verification.verifiedIssuer,
+  );
 
   if (revocation.outcome === "revoked" || revocation.outcome === "indeterminate") {
     return {
