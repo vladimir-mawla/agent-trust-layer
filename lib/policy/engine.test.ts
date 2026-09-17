@@ -648,6 +648,38 @@ describe("evaluatePolicyRequest — omitting a bounded scope field is refused, n
 });
 
 // ---------------------------------------------------------------------
+// FINDING 5 (L4 M5 review): `credential-verification-failed` — one of
+// nine documented RefusalKinds — had zero coverage anywhere despite
+// being reachable. Reached here through the REAL path: a malformed JWT
+// through the real `evaluateAuthorityCredentialTrust`, into
+// `evaluatePolicyRequest`.
+// ---------------------------------------------------------------------
+describe("evaluatePolicyRequest — credential-verification-failed is reachable via a real malformed JWT (FINDING 5)", () => {
+  it("refuses with refusalKind credential-verification-failed and a populated explanation", async () => {
+    const subject = makeIdentity();
+    const anchors = new TrustAnchorSet([makeIdentity().did]);
+
+    const authority = await evaluateAuthorityCredentialTrust({
+      jwt: "abc.def", // malformed compact JWS — fails M3's own "parse" step
+      presenterProof: proofOfPossessionFor(subject, 0),
+      anchors,
+      now: 0,
+    });
+    expect(authority.accepted).toBe(false);
+    if (authority.accepted) throw new Error("expected a verification failure in this fixture");
+    expect(authority.stage).toBe("credential-verification");
+
+    const decision = record(evaluatePolicyRequest({ policy: purchasePolicy(), request: { action: "purchase", scope: { maxAmount: 1 } }, authority, history: [] }));
+
+    expect(decision.permitted).toBe(false);
+    if (decision.permitted) throw new Error("expected refusal");
+    expect(decision.explanation.refusalKind).toBe("credential-verification-failed");
+    expect(decision.explanation.narrative.length).toBeGreaterThan(0);
+    expectNonEmptyExplanation(decision);
+  });
+});
+
+// ---------------------------------------------------------------------
 // FINDING 8 (L4 M5 review, defending an M3 gap without editing M3): M3
 // never validates that `credentialSubject.scope` values are finite — a
 // hand-crafted JWT with a literal `1e400` decodes to a real `Infinity`
