@@ -354,6 +354,58 @@ export function evaluatePolicyRequest(input: EvaluatePolicyRequestInput): Policy
         `requested "${field}" = ${requestedValue} is not a finite number; a non-finite requested value is always refused, never compared against a ceiling (FINDING 8)`,
       );
     }
+    // FIX (M7 exploratory attack suite finding, 2026-09-17): a negative
+    // REQUESTED value was, before this fix, compared against the ceiling
+    // exactly like any other value — `-500000 > 500` is `false`, so it
+    // was PERMITTED, identically to a small in-range positive request.
+    // That is a real authorization gap, not a curiosity: every bound
+    // this engine understands (the credential's own scope value, an
+    // `ActionScopeRule.maxScope` ceiling, a triggered
+    // `HistoryNarrowRule.narrowedMax`) is a `maxX`-style CEILING —
+    // `permitted-scope.ts`'s own module comment and ADR 0004 both frame
+    // every one of them that way. None of them is a signed range or a
+    // lower bound, and the semantics of "a negative request against a
+    // maximum" are simply undefined by this policy language — reading
+    // `-500000 <= 500` as "safely within scope" treats arithmetic
+    // truth as if it were domain truth. For the domains this engine's
+    // own examples model (a purchase, a transfer, a refund amount), a
+    // negative value is not "a smaller version of the same request" —
+    // it is a REVERSAL, the opposite direction from whatever the
+    // ceiling was authored to bound. So "authority to spend up to 500"
+    // must never silently double as "authority to move 500,000 in the
+    // other direction" just because no rule happened to name a floor.
+    // The universally-correct fix, GIVEN THE SHAPE OF EVERY BOUND THIS
+    // ENGINE HAS, is: a requested numeric value must be non-negative,
+    // full stop — checked BEFORE it is ever compared to a ceiling, the
+    // same posture already taken one guard above for a non-finite
+    // requested value (both are "a number this engine cannot safely
+    // bound", just for a different reason: unmeasurable vs.
+    // wrong-direction). This is deliberately the NARROW fix, not the
+    // general one: a policy language able to express a genuine lower
+    // bound (a `minScope` ceiling-from-below) or a true signed range
+    // (e.g. "a refund between -1000 and 0 is fine, but nothing past
+    // that") would be strictly more expressive, and is NOT built here —
+    // seeing this as "the" answer rather than "a" answer would be the
+    // same mistake, one level up, that this fix itself is closing. See
+    // ADR 0004's amendment for the full record.
+    //
+    // Zero is explicitly EXCLUDED from this refusal: `0 < 0` is `false`,
+    // so a request of exactly `0` for a bounded field is permitted, same
+    // as before — a zero-usage request is harmless, and refusing it
+    // would be over-reach this fix has no mandate for. `-0` also passes
+    // (`-0 < 0` is `false` too) — a deliberate, not merely incidental,
+    // decision: `-0` and `0` are the same real-world magnitude, and
+    // treating them differently would be exactly the kind of sign-only
+    // technicality this fix is trying to eliminate, not add.
+    if (requestedValue < 0) {
+      return refuse(
+        "negative-scope-value",
+        bound.rule,
+        fieldEvidence(`scope.${field}`, { requested: requestedValue, permitted: bound.value, note: "requested value is negative" }),
+        `requested "${field}" = ${requestedValue} is negative; the permitted ceiling for this field (source: ${describeBoundSource(bound)}, maximum ${bound.value}) is a maximum-style bound whose semantics are undefined for a negative request, so it is refused distinctly as "negative-scope-value" rather than compared against the ceiling as if it were merely a very small request (M7 exploratory attack suite finding)`,
+      );
+    }
+
     if (!Number.isFinite(bound.value)) {
       // FINDING 3 / FINDING 8: a non-finite BOUND — `NaN` from an
       // adversarial candidate (real `Math.min` poisons to `NaN` if ANY
