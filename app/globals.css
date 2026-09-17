@@ -5,6 +5,21 @@
   --muted: #5a5a5a;
   --border: #dddddd;
   --accent: #2b5fd9;
+
+  /* Semantic colour for a trust decision — deliberately separate from
+     --accent (a hue, used for links/emphasis): permit/refuse must read
+     without depending on the accent choice, since the whole point of
+     M8 is that a decision's polarity is legible at a glance. */
+  --permit-fg: #14532d;
+  --permit-bg: #e7f5ec;
+  --permit-border: #2d7355;
+  --refuse-fg: #7a1f1f;
+  --refuse-bg: #fbeaea;
+  --refuse-border: #b3413f;
+
+  --card-bg: #fbfbfb;
+  --code-bg: color-mix(in srgb, var(--fg) 8%, transparent);
+  --mono: "SF Mono", ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -14,6 +29,24 @@
     --muted: #a0a0a0;
     --border: #333333;
     --accent: #7aa2ff;
+
+    --permit-fg: #8fdaa8;
+    --permit-bg: #12291b;
+    --permit-border: #3f8f63;
+    --refuse-fg: #f2a6a3;
+    --refuse-bg: #2b1414;
+    --refuse-border: #a24d4a;
+
+    --card-bg: #181818;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
   }
 }
 
@@ -35,9 +68,18 @@ body {
 }
 
 main {
-  max-width: 640px;
+  max-width: 720px;
   margin: 0 auto;
   padding: 2rem 1.25rem 4rem;
+}
+
+.dek {
+  font-size: 1.05rem;
+  color: var(--fg);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
 
 h1 {
@@ -143,4 +185,480 @@ h2 {
 @media (max-width: 420px) {
   .ledger li { grid-template-columns: 2.2rem 1fr; }
   .ledger .mstate { grid-column: 2; }
+}
+
+/* ==========================================================================
+   M8 — the demo: cast list, decision chips, beat cards, evidence tables,
+   the interactive control, and the browser-side identity panel.
+   ========================================================================== */
+
+code, .did-tag, .beat-rule-id, .evidence-row, input, .tabular {
+  font-family: var(--mono);
+}
+
+h2 {
+  font-size: 1rem;
+  margin: 2rem 0 0.75rem;
+}
+
+.demo-section {
+  margin-top: 1.5rem;
+}
+
+.panel-lede {
+  font-size: 0.9rem;
+  margin-top: 0;
+}
+
+.cast-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem 0.75rem;
+  margin: 1rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+}
+
+.cast-list dt {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 0.15rem;
+}
+
+.cast-list dd {
+  margin: 0;
+  min-width: 0;
+}
+
+@media (max-width: 560px) {
+  .cast-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+.policy-line {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.did-tag {
+  font-size: 0.82rem;
+  background: var(--code-bg);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  white-space: nowrap;
+  word-break: keep-all;
+  /* Last-resort fallback below the ~400px width this page targets: the
+     truncated DID (bounded to ~31 characters by `truncateDid`) is still
+     let go as one line up to that width; only a viewport narrower than
+     the demo's own target would ever reach this. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 360px) {
+  .did-tag {
+    white-space: normal;
+  }
+
+  .did-compare-label {
+    min-width: 0;
+  }
+}
+
+.did-tag-match {
+  background: var(--permit-bg);
+  color: var(--permit-fg);
+  box-shadow: inset 0 0 0 1px var(--permit-border);
+}
+
+.did-tag-differ {
+  background: var(--refuse-bg);
+  color: var(--refuse-fg);
+}
+
+.beat-grid {
+  display: grid;
+  /* minmax(0, 1fr): see `.beat-meta`'s own comment on grid blowout —
+     without the minmax(0, ...) floor, this single track's implicit
+     minimum width is its content's min-content size, so ONE beat-card
+     with a long unbreakable run anywhere inside it would silently widen
+     the whole grid (and therefore the page) past the viewport. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.85rem;
+}
+
+.beat-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem 1.05rem;
+  background: var(--card-bg);
+}
+
+.beat-card[data-permitted="true"] {
+  box-shadow: inset 3px 0 0 0 var(--permit-border);
+}
+
+.beat-card[data-permitted="false"] {
+  box-shadow: inset 3px 0 0 0 var(--refuse-border);
+}
+
+.beat-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
+}
+
+.beat-card-title {
+  font-size: 0.92rem;
+  margin: 0;
+  color: var(--fg);
+  /* Flex items default to a content-based min-width, which would rather
+     overflow the card than wrap this title on a narrow screen — see the
+     matching minmax(0, 1fr) fix on `.beat-meta` below for the grid
+     analogue of the same bug. */
+  min-width: 0;
+  flex: 1 1 160px;
+  overflow-wrap: anywhere;
+}
+
+/* The chip is where permit/refuse is encoded in FORM, not just words:
+   colour + a distinct shape, so the two states are distinguishable at a
+   glance even to a viewer skimming thumbnails. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.chip-permit {
+  background: var(--permit-bg);
+  color: var(--permit-fg);
+  box-shadow: inset 0 0 0 1px var(--permit-border);
+}
+
+.chip-refuse {
+  background: var(--refuse-bg);
+  color: var(--refuse-fg);
+  box-shadow: inset 0 0 0 1px var(--refuse-border);
+}
+
+.beat-meta {
+  display: grid;
+  /* minmax(0, 1fr), not a bare 1fr: a grid track's implicit minimum
+     width is its content's min-content size, which for an unbreakable
+     string (a DID with no spaces) is that whole string — exactly the
+     phone-width blowout this fix closes. Same reasoning as
+     `.beat-card-title`'s flex `min-width: 0` above. */
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.15rem 0.6rem;
+  margin: 0 0 0.6rem;
+  font-size: 0.85rem;
+}
+
+.beat-meta div {
+  display: contents;
+}
+
+.beat-meta dt {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  align-self: baseline;
+  padding-top: 0.1rem;
+}
+
+.beat-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.did-compare {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  margin: 0.5rem 0 0.7rem;
+  background: color-mix(in srgb, var(--refuse-bg) 55%, transparent);
+}
+
+.did-compare.did-compare-match {
+  background: color-mix(in srgb, var(--refuse-bg) 35%, transparent);
+}
+
+.did-compare-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.3rem;
+}
+
+.did-compare-row:last-of-type {
+  margin-bottom: 0;
+}
+
+.did-compare-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  min-width: 8.5rem;
+}
+
+.did-compare-note {
+  font-size: 0.82rem;
+  color: var(--fg);
+  margin: 0.5rem 0 0;
+}
+
+.beat-stage {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 0.3rem 0;
+}
+
+.beat-rule {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: baseline;
+  font-size: 0.82rem;
+  margin: 0.3rem 0;
+  min-width: 0;
+}
+
+.beat-rule-desc {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.beat-rule-id {
+  background: var(--code-bg);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.beat-rule-desc {
+  color: var(--muted);
+}
+
+/* A plain flex row, not a <table>: mixing table-cell children under an
+   overridden flex/block display on <tr>/<tbody> is exactly the kind of
+   browser-dependent sizing quirk that caused a real phone-width blowout
+   here during M8 development (a <td> kept its own intrinsic
+   shrink-to-fit width instead of following the flex row's wrapping) —
+   plain elements give the same "requested / permitted / actual" chip
+   layout with none of that risk. */
+.evidence-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.9rem;
+  margin: 0.5rem 0;
+  font-size: 0.82rem;
+  min-width: 0;
+}
+
+.evidence-path {
+  font-weight: 600;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.evidence-chip {
+  color: var(--muted);
+  /* NOT white-space: nowrap — an evidence value can be an arbitrary-
+     length string (an error message, a DID), not just a short number,
+     and nowrap would force that whole value onto one unbreakable line
+     regardless of how the flex row around it wraps (the exact bug this
+     comment replaces: flex-wrap only wraps CHILDREN onto new rows, it
+     cannot wrap the un-wrappable CONTENT of one nowrap child). */
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.evidence-chip strong {
+  color: var(--fg);
+}
+
+/* Every one of these narrative/annotation paragraphs can legitimately
+   embed a full did:key string (e.g. "issuer did:key:z6Mk...") inline in
+   otherwise ordinary prose — one unbreakable ~50-character token inside
+   a sentence that is itself full of ordinary break opportunities.
+   overflow-wrap: anywhere lets THAT ONE token break rather than the
+   whole paragraph forcing the page wider than the viewport. */
+.beat-narrative,
+.beat-annotation,
+.beat-stage,
+.did-compare-note,
+.panel-lede,
+.policy-line {
+  overflow-wrap: anywhere;
+}
+
+.beat-narrative {
+  font-size: 0.85rem;
+  margin: 0.5rem 0 0;
+}
+
+.beat-annotation {
+  font-size: 0.82rem;
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--fg);
+}
+
+/* --- interactive control + identity panel -------------------------------- */
+
+.panel {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.panel-secondary {
+  margin-top: 1.75rem;
+}
+
+.control-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.85rem;
+  margin-bottom: 0.85rem;
+}
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.control input {
+  font-size: 0.95rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.55rem;
+  width: 9rem;
+}
+
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.preset-button {
+  font-size: 0.78rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.preset-button:hover {
+  border-color: var(--accent);
+}
+
+.attack-fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.7rem 0.85rem 0.85rem;
+  margin: 0 0 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.attack-fieldset legend {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 0 0.3rem;
+}
+
+.attack-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.attack-option input {
+  margin-top: 0.25rem;
+}
+
+.attack-hint {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.evaluate-button {
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  border-radius: 7px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.evaluate-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.panel-error {
+  color: var(--refuse-fg);
+  font-size: 0.85rem;
+  margin-top: 0.6rem;
+}
+
+.panel-result {
+  margin-top: 1rem;
+}
+
+.identity-result {
+  margin-top: 0.9rem;
+}
+
+.identity-ok {
+  color: var(--permit-fg);
+  font-size: 0.85rem;
+}
+
+.identity-fail {
+  color: var(--refuse-fg);
+  font-size: 0.85rem;
 }
