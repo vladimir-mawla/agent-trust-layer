@@ -5,7 +5,30 @@
      Next.js needed the root tsconfig.json for its own bundler-resolution
      rules (see ../tsconfig.json), this file was carved out rather than
      loosened in place. `npm run typecheck` now runs both configs as two
-     separate `tsc` invocations. */
+     separate `tsc` invocations.
+
+     M7 note: PLAN.md puts the attack suite under a top-level "tests"
+     directory, but until now this file's own "include" list (below)
+     only reached down into "lib", and the root tsconfig.json only
+     reaches into "app" — a suite living under "tests" would type-check
+     NOTHING, a silent hole in a milestone whose whole point is rigour
+     (a typo'd import, a wrong Extract-narrowing mistake, or a stale
+     field name in an attack test would silently never be caught by
+     "npm run typecheck", only by actually running the tests — and even
+     then maybe not, if the mistake made a test vacuously pass).
+     Resolved deliberately by widening THIS file's own "include" array
+     (below) to also reach the "tests" tree, rather than moving the
+     suite somewhere already covered: the tests tree needs the exact
+     same NodeNext resolution and strictness this file already enforces
+     for "lib" (relative imports use explicit ".js" extensions, same as
+     every existing test file under "lib"), so widening THIS config is
+     the natural fit — the root tsconfig.json (bundler resolution, DOM
+     lib, JSX) is for "app" and would be the wrong tool. The existing
+     "npm run typecheck" script's "tsc --noEmit -p tsconfig.lib.json"
+     invocation therefore now ALSO covers the attack suite, with no
+     change to package.json's script itself needed — proven with
+     "tsc --listFiles -p tsconfig.lib.json", grepping for the tests
+     tree's own files in that output. */
   "compilerOptions": {
     /* Language / module target.
        NodeNext resolution mirrors how Node actually resolves ESM at runtime
@@ -46,5 +69,5 @@
     "resolveJsonModule": true,
     "esModuleInterop": true
   },
-  "include": ["lib/**/*.ts"]
+  "include": ["lib/**/*.ts", "tests/**/*.ts"]
 }
