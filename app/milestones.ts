@@ -37,8 +37,8 @@ export const MILESTONES: readonly Milestone[] = [
   { id: "M5", title: "Policy engine with explanations", status: "done" },
   { id: "M6", title: "Cross-agent negotiation", status: "done" },
   { id: "M7", title: "The attack suite", status: "done" },
-  { id: "M8", title: "The interactive demo", status: "in-progress" },
-  { id: "M9", title: "Architecture snapshot and thesis", status: "queued" },
+  { id: "M8", title: "The interactive demo", status: "done" },
+  { id: "M9", title: "Architecture snapshot and thesis", status: "in-progress" },
 ] as const;
 
 export const TOTAL_MILESTONES = MILESTONES.length;
