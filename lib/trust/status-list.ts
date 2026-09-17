@@ -23,13 +23,22 @@
  * shared bitstring, not "is credential #94567 revoked?").
  *
  * This module makes that boundary structural, not just a comment:
- * `checkRevocation` is the ONLY async function in `lib/trust`, it is
- * the ONLY function anywhere in `lib/` that takes a network-shaped
- * `StatusListResolver` callback, and every other check in this project
- * (signature, temporal, subject-binding, issuer-identity, self-issued,
- * anchor/vouch trust) stays synchronous. A reviewer can `grep -n "async"
- * lib/` and the one match names exactly where the network dependency
- * lives.
+ * `checkRevocation` is the ONLY function anywhere in `lib/` that actually
+ * INVOKES the injected, network-shaped `StatusListResolver` callback —
+ * i.e. the only function that performs I/O — and every other check in
+ * this project (signature, temporal, subject-binding, issuer-identity,
+ * self-issued, anchor/vouch trust) stays synchronous and does no I/O at
+ * all. `grep -rn "resolver(" lib/ --include="*.ts" | grep -v test` names
+ * exactly one call site: `status-list.ts`'s own call, below. (`grep -n
+ * "async" lib/` is a DIFFERENT, broader question — it also matches
+ * `trust-decision.ts`'s `resolveRevocation`, `evaluateAuthorityCredentialTrust`,
+ * and `evaluateHistoryAttestationTrust`, none of which touch the network
+ * themselves; they are `async` only because they `await` a call chain
+ * that eventually reaches `checkRevocation`. An earlier version of this
+ * comment — and of ADR 0003 — conflated "is declared `async`" with "does
+ * I/O", which is why that grep was wrongly advertised as returning one
+ * match. The precise, verifiable claim is the "who calls the resolver"
+ * one above.)
  *
  * ## Fail-closed, and how stale is too stale
  *
