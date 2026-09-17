@@ -17,6 +17,18 @@
   --refuse-bg: #fbeaea;
   --refuse-border: #b3413f;
 
+  /* Neutral-but-notable colour: for a fact worth flagging that is
+     NEITHER a permit NOR a refusal — e.g. Beat 3's attacker DID being
+     character-for-character identical to the buyer's real DID. That
+     match is the attack surface, not a good outcome, so it must never
+     borrow --permit-* (which would teach the reader "green = fine
+     here" for the exact thing that is not fine) — and it isn't the
+     refusal either (the failed signature is), so it must not borrow
+     --refuse-* wholesale either. Keep this token distinct from both. */
+  --notice-fg: #7a4a00;
+  --notice-bg: #fff2d9;
+  --notice-border: #c9860f;
+
   --card-bg: #fbfbfb;
   --code-bg: color-mix(in srgb, var(--fg) 8%, transparent);
   --mono: "SF Mono", ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -36,6 +48,11 @@
     --refuse-fg: #f2a6a3;
     --refuse-bg: #2b1414;
     --refuse-border: #a24d4a;
+
+    /* See :root's own comment on --notice-* — same meaning, dark palette. */
+    --notice-fg: #e8b96a;
+    --notice-bg: #2a2008;
+    --notice-border: #a9791f;
 
     --card-bg: #181818;
   }
@@ -292,10 +309,13 @@ h2 {
   }
 }
 
+/* NOT --permit-*: a matching claimed/real DID here is the attack (an
+   impostor copied a public string), not a good outcome — see this
+   file's own comment on --notice-* above. */
 .did-tag-match {
-  background: var(--permit-bg);
-  color: var(--permit-fg);
-  box-shadow: inset 0 0 0 1px var(--permit-border);
+  background: var(--notice-bg);
+  color: var(--notice-fg);
+  box-shadow: inset 0 0 0 1px var(--notice-border);
 }
 
 .did-tag-differ {
