@@ -1,8 +1,8 @@
 /**
  * TIGHTEN_NEVER_LOOSEN, part 3: combining every source of a numeric
- * bound on one scope field into a single permitted ceiling, using
- * `Math.min` and ONLY `Math.min` — never `Math.max`, never "last one
- * wins", never an override. Three sources can name a bound for a field:
+ * bound on one scope field into a single permitted ceiling, using the
+ * real, literal `Math.min` — never `Math.max`, never "last one wins",
+ * never an override. Three sources can name a bound for a field:
  *
  *   1. the authority credential's OWN scope value (`RULE_AUTHORITY_OWN_SCOPE`)
  *   2. a policy-authored `ActionScopeRule.maxScope` ceiling
@@ -17,7 +17,32 @@
  * (history can't even be consulted without an accepted authority
  * credential already producing an envelope). `type-boundary.test.ts`
  * exercises this arithmetic at runtime with a deliberately-oversized
- * `narrowedMax`.
+ * `narrowedMax`, and `permitted-scope.test.ts` exercises it with
+ * fixtures where the tightest bound is deliberately NOT the first
+ * candidate (see FINDING 2, L4 M5 review — a hand-rolled `reduce` with a
+ * `<` comparison used to sit here, and happened to agree with `Math.min`
+ * on every fixture that existed at the time, entirely by chance: mutating
+ * it to `return candidates[0]` broke only 1 of 196 tests).
+ *
+ * ## Why the REAL `Math.min`, not a hand-rolled reduce (FINDING 3)
+ *
+ * ADR 0004 and this module both used to claim "`Math.min`, exclusively"
+ * while the implementation was actually
+ * `candidates.reduce((tightest, c) => (c.value < tightest.value ? c : tightest))`
+ * — a DIFFERENT function with different semantics for non-finite values:
+ * `Math.min(500, NaN)` is always `NaN` (poisons unconditionally), whereas
+ * that reduce only returns `NaN` when `NaN` happens to be the FIRST
+ * candidate — for any other position, `c.value < tightest.value` is
+ * `false` for a `NaN` `c.value`, so the reduce silently keeps the
+ * previous (finite, but not actually tighter) candidate and DISCARDS a
+ * genuinely non-finite bound instead of surfacing it. Prose and code
+ * disagreed, so now they agree: this uses the real `Math.min`, and its
+ * NaN-poisoning is the deliberate, safer behaviour — poisoning to `NaN`
+ * and then REFUSING (a non-finite bound must never be compared with `>`
+ * and read as "nothing is over scope" — see `engine.ts`'s explicit
+ * `Number.isFinite` check on the returned `FieldBound.value`, FINDING 3 /
+ * FINDING 8) is fail-closed, where silently dropping a tighter ceiling
+ * would not have been.
  */
 import type { Did } from "../identity/index.js";
 import type { ActionScopeRule } from "./policy-types.js";
@@ -80,8 +105,27 @@ export function computeFieldBound(
     return null;
   }
 
-  // Strict minimum — see the module comment. `reduce` with no initial
-  // value would throw on an empty array, which is why the length check
-  // above runs first.
-  return candidates.reduce((tightest, candidate) => (candidate.value < tightest.value ? candidate : tightest));
+  // The real, literal `Math.min` — see the module comment (FINDING 3).
+  // `Math.min(...)` on an empty array would be `Infinity`, which is why
+  // the length check above runs first; with at least one candidate,
+  // `minValue` is either a real finite tightest value, or `NaN` if ANY
+  // candidate is non-finite.
+  const minValue = Math.min(...candidates.map((candidate) => candidate.value));
+
+  // `candidates.length > 0` was already checked above, so `candidates[0]`
+  // is a guaranteed, real fallback here — never reached in practice
+  // (every branch below is exhaustive over how `Math.min` could have
+  // produced `minValue`), just defensive against `noUncheckedIndexedAccess`.
+  const first = candidates[0] as FieldBound;
+
+  if (Number.isNaN(minValue)) {
+    // `Math.min` poisons to `NaN` the instant any candidate is `NaN` —
+    // no candidate's `value === NaN` (NaN never equals anything, itself
+    // included), so attribute this to whichever candidate actually IS
+    // non-finite, so the explanation names the real offending source
+    // rather than an arbitrary one.
+    return candidates.find((candidate) => !Number.isFinite(candidate.value)) ?? first;
+  }
+
+  return candidates.find((candidate) => candidate.value === minValue) ?? first;
 }

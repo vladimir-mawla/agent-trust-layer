@@ -112,3 +112,32 @@ describe("computeFieldBound — tighten-never-loosen, mutation-resistant fixture
     expect(bound?.value).toBe(500);
   });
 });
+
+describe("computeFieldBound — real Math.min semantics, incl. NaN poisoning (FINDING 3)", () => {
+  it("uses literal Math.min: an out-of-order NaN candidate still poisons the result (a hand-rolled `<`-reduce would only poison if NaN were first)", () => {
+    // The credential's own scope (pushed FIRST) is a real, finite 500;
+    // a triggered history constraint (pushed LAST) is NaN. A `<`
+    // comparison reduce keeps the finite 500 here (`NaN < 500` is
+    // `false`), silently discarding the fact that one candidate was
+    // non-finite. Real `Math.min(500, NaN)` is unconditionally `NaN`.
+    const triggered = [triggeredFrom(historyRule({ narrowedMax: Number.NaN }))];
+    const bound = computeFieldBound("maxAmount", envelope({ maxAmount: 500 }), actionScopeRule({}), triggered);
+    expect(bound).not.toBeNull();
+    expect(Number.isNaN(bound?.value)).toBe(true);
+    // Attributed to the actual non-finite candidate, not an arbitrary one.
+    expect(bound?.source.kind).toBe("history-constraint");
+  });
+
+  it("poisons to NaN even when the NaN candidate is pushed FIRST (credential's own scope)", () => {
+    const bound = computeFieldBound("maxAmount", envelope({ maxAmount: Number.NaN }), actionScopeRule({ maxAmount: 500 }), []);
+    expect(Number.isNaN(bound?.value)).toBe(true);
+    expect(bound?.source.kind).toBe("authority-credential");
+  });
+
+  it("a non-finite (Infinity) credential scope value does not poison Math.min away, but is still reported as the bound when it is genuinely tightest is impossible — Infinity is never tightest, but is still surfaced when it's the ONLY candidate (FINDING 8: M3 does not validate scope-value finiteness)", () => {
+    const bound = computeFieldBound("maxAmount", envelope({ maxAmount: Number.POSITIVE_INFINITY }), actionScopeRule({}), []);
+    expect(bound).not.toBeNull();
+    expect(bound?.value).toBe(Number.POSITIVE_INFINITY);
+    expect(Number.isFinite(bound?.value)).toBe(false);
+  });
+});
