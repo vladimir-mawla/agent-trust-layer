@@ -43,6 +43,38 @@ export const MINIMUM_BITSTRING_BITS = 131_072;
  *  dispatch-on-whatever-prefix-shows-up. */
 const MULTIBASE_BASE64URL_PREFIX = "u";
 
+/**
+ * Explicit ceiling on how many bytes `decodeEncodedList` will let
+ * `gunzipSync` produce, passed as `node:zlib`'s own `maxOutputLength`
+ * option so an oversized decompression is refused BY zlib itself
+ * (bounded, cheap) rather than allowed to run to completion and only
+ * then discovered to be huge.
+ *
+ * Without this, the only thing standing between a malicious `encodedList`
+ * and an unbounded "decompression bomb" is incidental: `encodedList`
+ * travels inside a compact JWS, and `lib/credentials/jws.ts`'s
+ * `MAX_JWS_LENGTH` (64 KiB) bounds the compressed input — which happens
+ * to bound the achievable bomb to roughly 35 MB / 35 ms / 40 MB RSS
+ * today (measured). That protection is real today but accidental: it is
+ * a side effect of a constant that exists for an unrelated reason (JWS
+ * transport size), would vanish silently if `MAX_JWS_LENGTH` were ever
+ * raised for some other reason, and — per the module comment above —
+ * decompression here only ever runs AFTER signature and freshness checks
+ * already passed, so this isn't exploitable pre-auth today either way;
+ * this constant exists so that stays true by design, not by luck.
+ *
+ * The bound itself: §3's own minimum bitstring size is 131,072 bits =
+ * 16,384 bytes (16 KiB) uncompressed — the spec's privacy floor, not a
+ * ceiling. This constant sets the ceiling at 512x that floor: 8 MiB
+ * (8,388,608 bytes) = 67,108,864 bits, i.e. one shared status list could
+ * legitimately cover ~67 million credentials before this cap would ever
+ * refuse a real one — far beyond any deployment this project's demo (or
+ * any plausible real one built on it) needs, while still landing well
+ * under the ~35 MB the incidental JWS-length bound allows today, so this
+ * is strictly tighter defence in depth, not a loosening.
+ */
+export const MAX_DECOMPRESSED_BITSTRING_BYTES = 8 * 1024 * 1024;
+
 /** Build a bitstring of `sizeBits` bits (all zero / "unset"), GZIP it,
  *  and multibase-base64url-encode the result — the exact `encodedList`
  *  value a `BitstringStatusListCredential.credentialSubject` carries.
@@ -112,9 +144,14 @@ export function decodeEncodedList(encodedList: string): Uint8Array {
     throw new StatusListMalformedError('"encodedList" is not valid base64url after its multibase prefix', { cause });
   }
   try {
-    return new Uint8Array(gunzipSync(compressed));
+    return new Uint8Array(gunzipSync(compressed, { maxOutputLength: MAX_DECOMPRESSED_BITSTRING_BYTES }));
   } catch (cause) {
-    throw new StatusListMalformedError('"encodedList" did not GZIP-decompress', { cause });
+    // Covers both "not valid GZIP at all" and "decompresses to more than
+    // MAX_DECOMPRESSED_BITSTRING_BYTES" (node:zlib throws for both when
+    // maxOutputLength is exceeded) — either way, a typed failure here,
+    // never a native error or an actually-completed multi-hundred-MB
+    // allocation escaping this function.
+    throw new StatusListMalformedError('"encodedList" did not GZIP-decompress (or exceeded the maximum allowed decompressed size)', { cause });
   }
 }
 

@@ -33,6 +33,7 @@ export {
 
 export {
   MINIMUM_BITSTRING_BITS,
+  MAX_DECOMPRESSED_BITSTRING_BYTES,
   createEmptyEncodedList,
   encodeList,
   withBitSet,

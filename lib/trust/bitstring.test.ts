@@ -1,5 +1,7 @@
+import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { createEmptyEncodedList, decodeEncodedList, getStatusBit, withBitSet } from "./bitstring.js";
+import { encodeBase64Url } from "../credentials/index.js";
+import { MAX_DECOMPRESSED_BITSTRING_BYTES, createEmptyEncodedList, decodeEncodedList, encodeList, getStatusBit, withBitSet } from "./bitstring.js";
 import { BitstringIndexError, StatusListMalformedError } from "./errors.js";
 
 describe("bitstring encode/decode round trip", () => {
@@ -91,5 +93,41 @@ describe("decodeEncodedList fails closed on garbage input, never an unhandled th
   it("rejects valid base64url that isn't valid GZIP data", () => {
     // "uAAAA" decodes as valid base64url bytes that are not a GZIP stream.
     expect(() => decodeEncodedList("uAAAA")).toThrow(StatusListMalformedError);
+  });
+});
+
+// ---------------------------------------------------------------------
+// FINDING 3 (LOW-MEDIUM) — `decodeEncodedList` must bound how much a
+// single `encodedList` is allowed to decompress to, explicitly (via
+// `gunzipSync`'s own `maxOutputLength`), not merely by accident of
+// `MAX_JWS_LENGTH` bounding the compressed input. A highly compressible
+// payload (e.g. all-zero bytes, exactly what a real bitstring mostly
+// looks like) can decompress to something far larger than what it took
+// to compress — this proves the explicit cap actually refuses that,
+// fails closed with the existing typed error, and never lets an
+// oversized allocation complete.
+// ---------------------------------------------------------------------
+describe("decodeEncodedList enforces MAX_DECOMPRESSED_BITSTRING_BYTES (FINDING 3)", () => {
+  it("refuses (fails closed, never throws a native error) a GZIP payload that would decompress well beyond the cap", () => {
+    // All-zero bytes are maximally compressible: a few-KB compressed
+    // stream can still expand to many times MAX_DECOMPRESSED_BITSTRING_BYTES
+    // if nothing bounds the output. Comfortably over the cap (2x) so this
+    // assertion isn't sensitive to an off-by-one at the exact boundary.
+    const oversized = new Uint8Array(MAX_DECOMPRESSED_BITSTRING_BYTES * 2);
+    const compressed = gzipSync(oversized);
+    const encodedList = `u${encodeBase64Url(compressed)}`;
+
+    expect(() => decodeEncodedList(encodedList)).toThrow(StatusListMalformedError);
+  });
+
+  it("still accepts a large, legitimate bitstring comfortably under the cap", () => {
+    // A one-megabyte bitstring (8x the spec's 16KB privacy floor) is well
+    // within MAX_DECOMPRESSED_BITSTRING_BYTES (8MB) and must decode fine —
+    // proving the cap doesn't quietly reject realistic large deployments.
+    const oneMegabyte = new Uint8Array(1024 * 1024);
+    const encodedList = encodeList(oneMegabyte);
+
+    const decoded = decodeEncodedList(encodedList);
+    expect(decoded.length).toBe(oneMegabyte.length);
   });
 });
