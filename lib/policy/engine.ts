@@ -87,7 +87,7 @@ import {
 import { validatePolicy } from "./validate.js";
 import { computeAuthorityEnvelope, type AuthorityEnvelope } from "./envelope.js";
 import { computeHistoryConstraints } from "./history-constraints.js";
-import { computeFieldBound } from "./permitted-scope.js";
+import { computeFieldBound, type FieldBound } from "./permitted-scope.js";
 import { checkAuthorityInput, sanitizeHistoryInput } from "./decision-guards.js";
 import {
   GATE_ACTION_MATCH,
@@ -143,6 +143,27 @@ function refuse(kind: Parameters<typeof refusedExplanation>[0], rule: { readonly
 
 function isActionScopeRule(rule: { readonly kind: string }): rule is ActionScopeRule {
   return rule.kind === ACTION_SCOPE_RULE_KIND;
+}
+
+/** `"over-scope"` for every bound source except a triggered history
+ *  constraint, which always gets its own, more specific, refusal kind —
+ *  see the existing over-scope/history-constraint split below. Shared by
+ *  both the ordinary comparison branch and FINDING 4's
+ *  omitted-bounded-field branch and FINDING 3/8's non-finite-bound
+ *  branch, so all three name the refusal the same way. */
+function boundRefusalKind(bound: FieldBound): Parameters<typeof refusedExplanation>[0] {
+  return bound.source.kind === "history-constraint" ? "history-constraint" : "over-scope";
+}
+
+function describeBoundSource(bound: FieldBound): string {
+  switch (bound.source.kind) {
+    case "authority-credential":
+      return "the credential's own scope";
+    case "policy-rule":
+      return `policy rule ${bound.rule.ruleId}`;
+    case "history-constraint":
+      return `history attestation from ${bound.source.attestationIssuer} (metric value ${bound.source.metricValue}) via rule "${bound.rule.ruleId}"`;
+  }
 }
 
 export function evaluatePolicyRequest(input: EvaluatePolicyRequestInput): PolicyDecision {
@@ -250,18 +271,93 @@ export function evaluatePolicyRequest(input: EvaluatePolicyRequestInput): Policy
   const historyRules = policy.rules.filter((rule) => rule.kind === HISTORY_NARROW_RULE_KIND);
   const triggered = computeHistoryConstraints(historyRules, envelope.action, history);
 
-  for (const [field, requestedValue] of Object.entries(request.scope)) {
-    if (typeof requestedValue !== "number") {
-      // Non-numeric scope dimensions are out of scope for this
-      // milestone's bound-checking — see DELIBERATE_OMISSIONS in the M5
-      // report. Not silently ignored forever: it is simply not a field
-      // this engine's numeric-ceiling mechanism can evaluate.
-      continue;
-    }
+  // --- FINDING 4: evaluate every field that ANY source (the credential's
+  //     own scope, the matching policy rule's ceiling, or a triggered
+  //     history constraint) actually names a bound for — not merely the
+  //     fields the REQUEST happens to mention. `computeFieldBound(field,
+  //     ...)` only ever finds a bound for a field named by one of those
+  //     three sources, so `boundedFields` below is exactly the set of
+  //     fields this engine can, and must, check. Iterating
+  //     `request.scope`'s own keys instead (as this loop used to) let a
+  //     counterparty omit exactly the field it would be limited on and
+  //     receive an unconditional permit, because a field the loop never
+  //     visited was never checked at all — the credential's own granted
+  //     ceiling was never even consulted. See ADR 0004 for why "omitted"
+  //     is read as "unbounded, refuse" rather than "zero usage, permit". */
+  const boundedFields = new Set<string>();
+  for (const [field, value] of Object.entries(envelope.scope)) {
+    if (typeof value === "number") boundedFields.add(field);
+  }
+  for (const field of Object.keys(matchingRule.maxScope)) {
+    boundedFields.add(field);
+  }
+  for (const constraint of triggered) {
+    boundedFields.add(constraint.rule.scopeField);
+  }
+
+  for (const field of boundedFields) {
     const bound = computeFieldBound(field, envelope, matchingRule, triggered);
     if (bound === null) {
+      // Cannot actually happen — `boundedFields` is derived from exactly
+      // the sources `computeFieldBound` consults — kept as a defensive
+      // `continue` rather than a non-null assertion.
       continue;
     }
+
+    const requestedRaw = request.scope[field];
+    if (typeof requestedRaw !== "number") {
+      // FINDING 4: a field this engine knows a bound for, but the
+      // request never supplied a numeric value for (omitted entirely, or
+      // present with a non-numeric value). Treated as an UNBOUNDED,
+      // unverifiable request for that dimension, refused fail-closed —
+      // never silently read as "0 / not requested, therefore fine",
+      // which is exactly the reading that let a counterparty bypass the
+      // credential's own ceiling by simply not naming the field.
+      return refuse(
+        boundRefusalKind(bound),
+        bound.rule,
+        fieldEvidence(`scope.${field}`, {
+          permitted: bound.value,
+          note: Object.prototype.hasOwnProperty.call(request.scope, field) ? "present in the request but not a number" : "omitted from the request entirely",
+        }),
+        `"${field}" is bounded to a maximum of ${bound.value} (source: ${describeBoundSource(bound)}), but the request did not supply a numeric value for it; an omitted-but-bounded field is refused, never treated as an implicit zero or as escaping the bound (FINDING 4)`,
+      );
+    }
+    const requestedValue = requestedRaw;
+
+    if (!Number.isFinite(requestedValue)) {
+      // FINDING 8 (M5's defense of an M3 gap: M3 never validates that a
+      // credential's own `scope` values are finite, so a hand-crafted
+      // JWT can carry a real `Infinity`/`NaN`). A non-finite REQUESTED
+      // value can never be verified as within any ceiling — refused,
+      // never compared.
+      return refuse(
+        "over-scope",
+        bound.rule,
+        fieldEvidence(`scope.${field}`, { requested: requestedValue, permitted: bound.value, note: "requested value is not a finite number" }),
+        `requested "${field}" = ${requestedValue} is not a finite number; a non-finite requested value is always refused, never compared against a ceiling (FINDING 8)`,
+      );
+    }
+    if (!Number.isFinite(bound.value)) {
+      // FINDING 3 / FINDING 8: a non-finite BOUND — `NaN` from an
+      // adversarial candidate (real `Math.min` poisons to `NaN` if ANY
+      // candidate is non-finite — see `permitted-scope.ts`), or
+      // `Infinity` smuggled through an authority credential's own
+      // unvalidated scope value — must refuse, never permit.
+      // `requested > NaN` and `requested > Infinity` (for any finite
+      // requested value) both evaluate to `false`, which a naive
+      // comparison would read as "never over scope" — i.e. an
+      // unconditional permit. Checked explicitly, ahead of that
+      // comparison, so a non-finite ceiling can never be mistaken for an
+      // unbounded permit.
+      return refuse(
+        boundRefusalKind(bound),
+        bound.rule,
+        fieldEvidence(`scope.${field}`, { requested: requestedValue, permitted: bound.value, note: "the permitted ceiling itself is not a finite number" }),
+        `the permitted ceiling for "${field}" (source: ${describeBoundSource(bound)}) is not a finite number (${String(bound.value)}); a non-finite ceiling always refuses rather than being treated as unbounded permission (FINDING 3 / FINDING 8)`,
+      );
+    }
+
     if (requestedValue > bound.value) {
       if (bound.source.kind === "history-constraint") {
         return refuse(
@@ -275,7 +371,7 @@ export function evaluatePolicyRequest(input: EvaluatePolicyRequestInput): Policy
         "over-scope",
         bound.rule,
         fieldEvidence(`scope.${field}`, { requested: requestedValue, permitted: bound.value }),
-        `requested "${field}" = ${requestedValue} exceeds the permitted maximum of ${bound.value} (source: ${bound.source.kind === "authority-credential" ? "the credential's own scope" : "policy rule " + bound.rule.ruleId})`,
+        `requested "${field}" = ${requestedValue} exceeds the permitted maximum of ${bound.value} (source: ${describeBoundSource(bound)})`,
       );
     }
   }

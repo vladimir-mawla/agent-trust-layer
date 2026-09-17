@@ -545,3 +545,168 @@ describe("evaluatePolicyRequest — malformed authority/history inputs fail clos
     expectNonEmptyExplanation(decision);
   });
 });
+
+// ---------------------------------------------------------------------
+// FINDING 4 (L4 M5 review): omitting a bounded scope field must not
+// bypass the ceiling. The loop used to iterate only `request.scope`'s
+// own keys — a field never named by the request was never checked at
+// all, so `{ scope: {} }` against a policy with a `maxAmount` ceiling
+// returned an unconditional permit, never even consulting the
+// credential's own granted ceiling.
+// ---------------------------------------------------------------------
+describe("evaluatePolicyRequest — omitting a bounded scope field is refused, not an implicit bypass (FINDING 4)", () => {
+  it("an entirely empty scope ({}) is refused when the action has a bounded field, instead of an unconditional permit", async () => {
+    const issuer = makeIdentity();
+    const subject = makeIdentity();
+    const anchors = new TrustAnchorSet([issuer.did]);
+    const authority = await acceptedAuthority(issuer, subject, anchors, { scope: { maxAmount: 500 }, withRevocationChecked: true });
+
+    const decision = record(
+      evaluatePolicyRequest({
+        policy: purchasePolicy({ rules: [{ kind: ACTION_SCOPE_RULE_KIND, id: "R-purchase", description: "x", action: "purchase", maxScope: { maxAmount: 500 } }] }),
+        request: { action: "purchase", scope: {} },
+        authority,
+        history: [],
+      }),
+    );
+
+    expect(decision.permitted).toBe(false);
+    if (decision.permitted) throw new Error("expected refusal");
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+    expect(decision.explanation.field.path).toBe("scope.maxAmount");
+    expectNonEmptyExplanation(decision);
+  });
+
+  it("a scope naming SOME but not all bounded fields is refused for the omitted field", async () => {
+    const issuer = makeIdentity();
+    const subject = makeIdentity();
+    const anchors = new TrustAnchorSet([issuer.did]);
+    const authority = await acceptedAuthority(issuer, subject, anchors, { scope: { maxAmount: 500, maxItems: 10 }, withRevocationChecked: true });
+
+    const decision = record(
+      evaluatePolicyRequest({
+        policy: purchasePolicy({
+          rules: [{ kind: ACTION_SCOPE_RULE_KIND, id: "R-purchase", description: "x", action: "purchase", maxScope: { maxAmount: 500, maxItems: 10 } }],
+        }),
+        request: { action: "purchase", scope: { maxAmount: 200 } }, // maxItems omitted
+        authority,
+        history: [],
+      }),
+    );
+
+    expect(decision.permitted).toBe(false);
+    if (decision.permitted) throw new Error("expected refusal");
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+    expect(decision.explanation.field.path).toBe("scope.maxItems");
+    expectNonEmptyExplanation(decision);
+  });
+
+  it("a scope field no rule or credential covers is silently ignored (still permitted), distinct from an omitted BOUNDED field", async () => {
+    const issuer = makeIdentity();
+    const subject = makeIdentity();
+    const anchors = new TrustAnchorSet([issuer.did]);
+    const authority = await acceptedAuthority(issuer, subject, anchors, { scope: { maxAmount: 500 }, withRevocationChecked: true });
+
+    const decision = record(
+      evaluatePolicyRequest({
+        policy: purchasePolicy({ rules: [{ kind: ACTION_SCOPE_RULE_KIND, id: "R-purchase", description: "x", action: "purchase", maxScope: { maxAmount: 500 } }] }),
+        request: { action: "purchase", scope: { maxAmount: 200, unrelatedField: 999 } },
+        authority,
+        history: [],
+      }),
+    );
+
+    expect(decision.permitted).toBe(true);
+    expectNonEmptyExplanation(decision);
+  });
+
+  it("a scope naming an extra field the credential itself never mentions, but the POLICY does, is still bound-checked", async () => {
+    const issuer = makeIdentity();
+    const subject = makeIdentity();
+    const anchors = new TrustAnchorSet([issuer.did]);
+    // Credential grants ONLY maxAmount — maxItems is a policy-only ceiling.
+    const authority = await acceptedAuthority(issuer, subject, anchors, { scope: { maxAmount: 500 }, withRevocationChecked: true });
+
+    const policy = purchasePolicy({
+      rules: [{ kind: ACTION_SCOPE_RULE_KIND, id: "R-purchase", description: "x", action: "purchase", maxScope: { maxAmount: 500, maxItems: 10 } }],
+    });
+
+    const permitted = record(
+      evaluatePolicyRequest({ policy, request: { action: "purchase", scope: { maxAmount: 200, maxItems: 5 } }, authority, history: [] }),
+    );
+    expect(permitted.permitted).toBe(true);
+
+    const refused = record(
+      evaluatePolicyRequest({ policy, request: { action: "purchase", scope: { maxAmount: 200, maxItems: 50 } }, authority, history: [] }),
+    );
+    expect(refused.permitted).toBe(false);
+    if (refused.permitted) throw new Error("expected refusal");
+    expect(refused.explanation.refusalKind).toBe("over-scope");
+    expect(refused.explanation.field.path).toBe("scope.maxItems");
+    expectNonEmptyExplanation(refused);
+  });
+});
+
+// ---------------------------------------------------------------------
+// FINDING 8 (L4 M5 review, defending an M3 gap without editing M3): M3
+// never validates that `credentialSubject.scope` values are finite — a
+// hand-crafted JWT with a literal `1e400` decodes to a real `Infinity`
+// (the normal issuance path closes this only by accident:
+// `JSON.stringify(Infinity)` produces `null`, which a `typeof` guard
+// then excludes — not a deliberate check). Since M3 is frozen, this
+// fixture simulates "what if a scope value WAS non-finite" directly (the
+// way `type-boundary.test.ts` already builds hand-constructed
+// `AuthorityEnvelope`/rule fixtures to test arithmetic in isolation),
+// to prove M5 defends anyway: a non-finite bound refuses, never permits.
+// ---------------------------------------------------------------------
+function fabricatedAcceptedAuthority(scope: Record<string, number>): TrustDecision<AuthorityCredential> & { readonly accepted: true } {
+  const issuer = makeIdentity();
+  const subject = makeIdentity();
+  return {
+    accepted: true,
+    reason: "fabricated fixture for FINDING 8 — simulates a scope value M3 never validates as finite",
+    credentialVerification: {
+      ok: true,
+      credential: { credentialSubject: { id: subject.did, action: "purchase", scope } },
+      verifiedIssuer: issuer.did,
+      verifiedSubject: subject.did,
+      verifiedAt: 0,
+      revocationChecked: false,
+    },
+    issuerTrust: { trusted: true, issuer: issuer.did, reason: { kind: "direct-anchor" } },
+    revocation: { outcome: "not-checked", reason: "fabricated fixture; revocation is irrelevant to this test" },
+  } as unknown as TrustDecision<AuthorityCredential> & { readonly accepted: true };
+}
+
+describe("evaluatePolicyRequest — a non-finite bound refuses rather than permits (FINDING 3 / FINDING 8)", () => {
+  const permissivePolicy: Policy = {
+    id: "policy-nonfinite-fixture",
+    version: "1.0.0",
+    revocationHandling: { requireChecked: false, acknowledgedBy: "test-fixture", reason: "no status list wired up in this fixture" },
+    rules: [{ kind: ACTION_SCOPE_RULE_KIND, id: "R-purchase", description: "purchase ceiling", action: "purchase", maxScope: {} }],
+  };
+
+  it("an Infinity scope value on the authority credential itself refuses, never permits", () => {
+    const authority = fabricatedAcceptedAuthority({ maxAmount: Number.POSITIVE_INFINITY });
+
+    const decision = record(evaluatePolicyRequest({ policy: permissivePolicy, request: { action: "purchase", scope: { maxAmount: 1_000_000 } }, authority, history: [] }));
+
+    expect(decision.permitted).toBe(false);
+    if (decision.permitted) throw new Error("expected refusal — a non-finite ceiling must never read as unconditional permission");
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+    expectNonEmptyExplanation(decision);
+  });
+
+  it("a non-finite REQUESTED value refuses, never compared as \"within\" any ceiling", () => {
+    const authority = fabricatedAcceptedAuthority({ maxAmount: 500 });
+
+    const decision = record(
+      evaluatePolicyRequest({ policy: permissivePolicy, request: { action: "purchase", scope: { maxAmount: Number.POSITIVE_INFINITY } }, authority, history: [] }),
+    );
+
+    expect(decision.permitted).toBe(false);
+    if (decision.permitted) throw new Error("expected refusal — a non-finite requested value must never read as within scope");
+    expect(decision.explanation.refusalKind).toBe("over-scope");
+    expectNonEmptyExplanation(decision);
+  });
+});
